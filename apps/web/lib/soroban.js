@@ -96,6 +96,29 @@ export async function readRequest(id) {
   return unwrap(tx.result);
 }
 
+/** Tüm talepler, en yeni önce. Hackathon ölçeğinde sayı küçük. */
+export async function readAllRequests() {
+  const client = await escrowClient();
+  const count = Number((await client.request_count()).result);
+  const ids = Array.from({ length: count }, (_, i) => count - 1 - i);
+  return Promise.all(
+    ids.map(async (id) => ({ ...(await readRequest(id)), id: BigInt(id) })),
+  );
+}
+
+/** Hangi koordinatör onayladı — 2/3 barını beslemek için. */
+export async function readApprovals(requestId, coordinators) {
+  const client = await escrowClient();
+  return Promise.all(
+    coordinators.map(async (address) => ({
+      address,
+      approved: (
+        await client.has_approved({ request_id: BigInt(requestId), coordinator: address })
+      ).result,
+    })),
+  );
+}
+
 export async function readConfig() {
   const client = await escrowClient();
   return unwrap((await client.get_config()).result);
