@@ -5,7 +5,7 @@ import { Buffer } from 'buffer';
 
 import { useEffect, useState } from 'react';
 import { FileUp, Loader2, ShieldCheck, ArrowUpRight } from 'lucide-react';
-import { createRequest, explorerTx } from '../lib/soroban.js';
+import { createRequest, explorerTx, readEscrow, fromStroops } from '../lib/soroban.js';
 import { hashEvidence, shortHash, formatBytes } from '../lib/evidence.js';
 import { indicativePrice, assetIds } from '../lib/anchor.js';
 
@@ -19,6 +19,13 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState(null);
   const [error, setError] = useState(null);
+  const [escrowBalance, setEscrowBalance] = useState(null);
+
+  // Talep escrow'dan büyükse ödeme anında contract reddeder (Error #9).
+  // Kullanıcıya o ana kadar beklemek yerine burada söylüyoruz.
+  useEffect(() => {
+    readEscrow().then((e) => setEscrowBalance(fromStroops(e.balance))).catch(() => {});
+  }, []);
 
   // Gösterge quote — talep anında. Firm quote ödeme anında alınır (plan 5.5).
   useEffect(() => {
@@ -96,6 +103,9 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
     }
   }
 
+  const neededUsdc = quote ? Number(quote.sell_amount) : 0;
+  const exceedsEscrow =
+    escrowBalance !== null && quote && neededUsdc > Number(escrowBalance);
   const ready = wallet && evidence && quote && need.trim() && supplierName.trim();
 
   return (
@@ -126,8 +136,10 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
               />
             </Field>
             <Field label="Escrow'dan çıkacak">
-              <div className="input flex items-center justify-between font-mono text-verified">
-                {quote ? Number(quote.sell_amount).toFixed(4) : '—'}
+              <div className="input flex items-center justify-between font-mono">
+                <span className={exceedsEscrow ? 'text-signal' : 'text-verified'}>
+                  {quote ? neededUsdc.toFixed(4) : '—'}
+                </span>
                 <span className="text-xs text-muted">USDC</span>
               </div>
             </Field>
@@ -173,6 +185,13 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
               alt="kanıt önizleme"
               className="max-h-40 w-full rounded-lg border border-edge object-cover"
             />
+          )}
+
+          {escrowBalance !== null && (
+            <p className={`text-xs ${exceedsEscrow ? 'text-signal' : 'text-muted'}`}>
+              Escrow bakiyesi: <span className="font-mono">{escrowBalance} USDC</span>
+              {exceedsEscrow && ' — talep bundan büyük, ödeme adımında reddedilir. Önce bağış yapın.'}
+            </p>
           )}
 
           <button

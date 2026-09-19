@@ -8,6 +8,7 @@ import { Check, Loader2, Landmark, ArrowUpRight, CircleDashed } from 'lucide-rea
 import { shorten } from '../lib/wallet.js';
 import {
   readAllRequests,
+  readEscrow,
   readApprovals,
   readConfig,
   approveRequest,
@@ -23,12 +24,14 @@ export default function MultisigPanel({ wallet, refreshKey }) {
   const [rows, setRows] = useState(null);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
+  const [balance, setBalance] = useState(null);
 
   const load = useCallback(async () => {
     try {
       const cfg = config ?? (await readConfig());
       if (!config) setConfig(cfg);
 
+      setBalance((await readEscrow()).balance);
       const requests = await readAllRequests();
       const withApprovals = await Promise.all(
         requests.map(async (r) => ({
@@ -127,7 +130,11 @@ export default function MultisigPanel({ wallet, refreshKey }) {
         const count = r.approvals.filter((a) => a.approved).length;
         const alreadyVoted = myIndex >= 0 && r.approvals[myIndex]?.approved;
         const canApprove = wallet && myIndex >= 0 && !alreadyVoted && !r.completed;
-        const canRelease = wallet && count >= 2 && !r.completed;
+        // Contract bakiyeden büyük ödemeyi reddeder (Error #9). Kullanıcıyı
+        // imzalatıp hataya sürmek yerine önden söylüyoruz.
+        const shortBy =
+          balance !== null && r.amount > balance ? r.amount - balance : null;
+        const canRelease = wallet && count >= 2 && !r.completed && !shortBy;
 
         return (
           <section key={id} className="rounded-2xl border border-edge bg-surface p-6">
@@ -210,6 +217,12 @@ export default function MultisigPanel({ wallet, refreshKey }) {
                   )}
                   {busy === `release-${id}` ? 'Ödeniyor…' : 'Fonu serbest bırak'}
                 </button>
+              )}
+              {shortBy && count >= 2 && !r.completed && (
+                <span className="text-xs text-signal">
+                  Escrow'da {fromStroops(shortBy)} USDC eksik — ödeme için önce
+                  bağış gerekiyor.
+                </span>
               )}
               {wallet && myIndex < 0 && !r.completed && (
                 <span className="text-xs text-muted">
