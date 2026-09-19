@@ -1,0 +1,55 @@
+{
+  "12": {
+    "customers": {
+      "sendingClient": {
+        "first_name": "Ayse",
+        "last_name": "Yilmaz",
+        "email_address": "sendingClient@example.com",
+        "bank_account_number": "TR320010009999901234567890"
+      },
+      "receivingClient": {
+        "first_name": "Ayse",
+        "last_name": "Yilmaz",
+        "email_address": "receivingClient@example.com",
+        "bank_account_number": "TR320010009999901234567890"
+      },
+      "sendingAnchor": {
+        "first_name": "Ayse",
+        "last_name": "Yilmaz",
+        "email_address": "sendingAnchor@example.com",
+        "bank_account_number": "TR320010009999901234567890"
+      },
+      "receivingAnchor": {
+        "first_name": "Ayse",
+        "last_name": "Yilmaz",
+        "email_address": "receivingAnchor@example.com",
+        "bank_account_number": "TR320010009999901234567890"
+      }
+    },
+    "createCustomer": "sendingClient",
+    "deleteCustomer": "receivingClient",
+    "sameAccountDifferentMemos": [
+      "sendingClient",
+      "receivingClient"
+    ]
+  },
+  "6": {
+    "deposit": {
+      "transactionFields": {
+        "type": "bank_account"
+      }
+    },
+    "withdraw": {
+      "types": {
+        "bank_account": {
+          "transactionFields": {}
+        }
+      }
+    }
+  },
+  "38": {
+    "contexts": [
+      "sep6"
+    ]
+  }
+}
