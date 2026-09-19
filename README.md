@@ -115,6 +115,12 @@ node scripts/anchor-tour.js    # SEP-10 → SEP-12 → SEP-6 deposit → complet
 5. **Fonu serbest bırak** — zincir üstü payout, ardından anchor üzerinden TRY
 6. **Denetim izi** — kanıt → talep → onaylar → fon → anchor → TRY → banka referansı
 
+**Cüzdan eklentisi kurulamıyorsa:** sağ üstteki **Demo hesap** düğmesi
+donor/coord-a/coord-b/coord-c arasında tek tıkla geçiş yapar, imza tarayıcıda
+yerel atılır. Yalnızca `DEMO_MODE=true` iken görünür ve sadece bu dört testnet
+hesabını verir — `RELAYER_SECRET` bu yoldan asla geçmez. Herkese açık deploy'da
+`DEMO_MODE=false` bırakın.
+
 Cüzdanda USDC trustline'ı yoksa bağış panelinde **"USDC trustline aç"** düğmesi
 çıkar — anchor'dan gelen bir deposit de trustline olmadan `pending_trust`'ta
 beklerdi. Trustline başına 0.5 XLM rezerv gerekir.

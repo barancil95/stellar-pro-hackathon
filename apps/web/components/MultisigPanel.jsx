@@ -5,7 +5,7 @@ import { Buffer } from 'buffer';
 
 import { useCallback, useEffect, useState } from 'react';
 import { Check, Loader2, Landmark, ArrowUpRight, CircleDashed } from 'lucide-react';
-import { signer, shorten } from '../lib/wallet.js';
+import { shorten } from '../lib/wallet.js';
 import {
   readAllRequests,
   readApprovals,
@@ -58,7 +58,7 @@ export default function MultisigPanel({ wallet, refreshKey }) {
     try {
       await approveRequest({
         publicKey: wallet.address,
-        signTransaction: signer(wallet.address),
+        signTransaction: wallet.sign,
         requestId,
       });
       await load();
@@ -75,7 +75,7 @@ export default function MultisigPanel({ wallet, refreshKey }) {
     try {
       await executePayout({
         publicKey: wallet.address,
-        signTransaction: signer(wallet.address),
+        signTransaction: wallet.sign,
         requestId,
       });
       await load();

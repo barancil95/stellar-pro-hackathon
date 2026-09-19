@@ -5,7 +5,6 @@ import { Buffer } from 'buffer';
 
 import { useEffect, useState } from 'react';
 import { FileUp, Loader2, ShieldCheck, ArrowUpRight } from 'lucide-react';
-import { signer } from '../lib/wallet.js';
 import { createRequest, explorerTx } from '../lib/soroban.js';
 import { hashEvidence, shortHash, formatBytes } from '../lib/evidence.js';
 import { indicativePrice, assetIds } from '../lib/anchor.js';
@@ -71,7 +70,7 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
 
       const { requestId, hash } = await createRequest({
         publicKey: wallet.address,
-        signTransaction: signer(wallet.address),
+        signTransaction: wallet.sign,
         supplierRef: Buffer.from(supplier.supplierRef, 'hex'),
         amount: quote.sell_amount,
         proofHash: Buffer.from(evidence.hex, 'hex'),

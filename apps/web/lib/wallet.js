@@ -42,7 +42,12 @@ export async function connect() {
         try {
           k.setWallet(option.id);
           const { address } = await k.getAddress();
-          resolve({ address, walletId: option.id, walletName: option.name });
+          resolve({
+            address,
+            walletId: option.id,
+            walletName: option.name,
+            sign: signer(address),
+          });
         } catch (e) {
           reject(e);
         }
@@ -61,6 +66,40 @@ export function signer(address) {
       networkPassphrase: opts?.networkPassphrase || WalletNetwork.TESTNET,
     });
     return { signedTxXdr, signerAddress: signerAddress || address };
+  };
+}
+
+/* ----------------------------- demo imzalayıcı --------------------------- */
+
+/**
+ * Eklenti gerektirmeyen yedek yol. Anahtar tarayıcıda bellekte durur,
+ * imza yerel atılır. Yalnızca testnet demo hesapları için — sunucu tarafı
+ * DEMO_MODE=true değilse zaten anahtar vermez.
+ */
+export async function loadDemoAccounts() {
+  try {
+    const res = await fetch('/api/demo-accounts');
+    if (!res.ok) return [];
+    const { accounts } = await res.json();
+    return accounts ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export function demoSigner(secret) {
+  return async (xdr, opts) => {
+    // stellar-sdk tarayıcıda da çalışıyor; dinamik import bundle'ı şişirmesin diye.
+    const { Keypair, TransactionBuilder } = await import('@stellar/stellar-sdk');
+    const keypair = Keypair.fromSecret(secret);
+    const passphrase =
+      opts?.networkPassphrase ||
+      process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE ||
+      WalletNetwork.TESTNET;
+
+    const tx = TransactionBuilder.fromXDR(xdr, passphrase);
+    tx.sign(keypair);
+    return { signedTxXdr: tx.toXDR(), signerAddress: keypair.publicKey() };
   };
 }
 

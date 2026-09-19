@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { ArrowUpRight, Loader2, ShieldCheck } from 'lucide-react';
-import { signer } from '../lib/wallet.js';
 import { deposit, readEscrow, fromStroops, explorerTx, CONTRACT_ID, explorerContract } from '../lib/soroban.js';
 import { usdcPosition, openUsdcTrustline } from '../lib/stellar-account.js';
 import { TestnetHint } from './WalletButton.jsx';
@@ -34,7 +33,7 @@ export default function DonorPanel({ wallet, issuer }) {
     try {
       const hash = await openUsdcTrustline({
         publicKey: wallet.address,
-        signTransaction: signer(wallet.address),
+        signTransaction: wallet.sign,
         issuer,
       });
       setLastTx({ hash, label: 'USDC trustline açıldı' });
@@ -52,7 +51,7 @@ export default function DonorPanel({ wallet, issuer }) {
     try {
       const hash = await deposit({
         publicKey: wallet.address,
-        signTransaction: signer(wallet.address),
+        signTransaction: wallet.sign,
         amount,
       });
       setLastTx({ hash, label: 'Bağış zincire yazıldı' });
