@@ -47,28 +47,46 @@ async function request(url, options = {}) {
 const authHeader = (token) => ({ Authorization: `Bearer ${token}` });
 
 /**
+ * İmzalayan taraf iki şekilde gelebilir: sunucuda/script'te bir `Keypair`,
+ * tarayıcıda ise cüzdan — `{ publicKey, signTransaction }` (Wallets Kit ya da
+ * demo imzalayıcı). SEP-10 challenge'ı ikisiyle de imzalanabilsin diye.
+ */
+const addressOf = (signer) =>
+  typeof signer.publicKey === 'function' ? signer.publicKey() : signer.publicKey;
+
+async function signChallenge(signer, xdr, networkPassphrase) {
+  if (typeof signer.signTransaction === 'function') {
+    const { signedTxXdr } = await signer.signTransaction(xdr, { networkPassphrase });
+    return signedTxXdr;
+  }
+  const tx = TransactionBuilder.fromXDR(xdr, networkPassphrase);
+  tx.sign(signer);
+  return tx.toXDR();
+}
+
+/**
  * SEP-10. `memo` verilirse JWT'nin sub'ı "G…:memo" olur — aynı Stellar hesabı
  * altında ayrı müşteri kimliği. Tedarikçi başına IBAN kaydı bunun üzerine kurulu
  * (bkz. plan 5.2); memo'suz auth yaparsak TRY relayer'ın IBAN'ına gider.
  */
-export async function sep10Authenticate(keypair, { memo, clientDomain } = {}) {
+export async function sep10Authenticate(signer, { memo, clientDomain } = {}) {
   const h = await health();
   const url = new URL(h.sep.web_auth_endpoint);
-  url.searchParams.set('account', keypair.publicKey());
+  url.searchParams.set('account', addressOf(signer));
   if (memo !== undefined && memo !== null) url.searchParams.set('memo', String(memo));
   if (clientDomain) url.searchParams.set('client_domain', clientDomain);
 
   const challenge = await request(url.toString());
-  const tx = TransactionBuilder.fromXDR(
+  const signed = await signChallenge(
+    signer,
     challenge.transaction,
     challenge.network_passphrase || h.network_passphrase,
   );
-  tx.sign(keypair);
 
   const { token } = await request(challenge.endpoint || h.sep.web_auth_endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ transaction: tx.toXDR() }),
+    body: JSON.stringify({ transaction: signed }),
   });
   return token;
 }
@@ -77,15 +95,15 @@ export async function sep10Authenticate(keypair, { memo, clientDomain } = {}) {
  * JWT süresi dolmuşsa (401/403) bir kez yeniden auth edip tekrar dener.
  * Plan M2: "SEP-10 auth, 401'de otomatik yenileme".
  */
-export function makeSession(keypair, { memo } = {}) {
+export function makeSession(signer, { memo } = {}) {
   let token = null;
   const refresh = async () => {
-    token = await sep10Authenticate(keypair, { memo });
+    token = await sep10Authenticate(signer, { memo });
     return token;
   };
   return {
     get sub() {
-      return memo === undefined ? keypair.publicKey() : `${keypair.publicKey()}:${memo}`;
+      return memo === undefined ? addressOf(signer) : `${addressOf(signer)}:${memo}`;
     },
     async token() {
       return token || refresh();
