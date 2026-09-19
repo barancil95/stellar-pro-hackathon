@@ -1,0 +1,14 @@
+{
+  "name": "proof-of-action-scripts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "anchor:tour": "node scripts/anchor-tour.js",
+    "deploy": "node scripts/deploy-contract.js"
+  },
+  "dependencies": {
+    "@stellar/stellar-sdk": "^14.2.0",
+    "dotenv": "^16.4.7"
+  }
+}
