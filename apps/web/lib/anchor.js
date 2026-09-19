@@ -9,7 +9,10 @@
 
 import { TransactionBuilder } from '@stellar/stellar-sdk';
 
-const HOME_DOMAIN = process.env.ANCHOR_HOME_DOMAIN || 'tr-mock-anchor.fly.dev';
+const HOME_DOMAIN =
+  process.env.NEXT_PUBLIC_ANCHOR_HOME_DOMAIN ||
+  process.env.ANCHOR_HOME_DOMAIN ||
+  'tr-mock-anchor.fly.dev';
 const BASE = `https://${HOME_DOMAIN}`;
 
 let healthCache = null;
