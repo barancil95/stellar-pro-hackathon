@@ -19,6 +19,8 @@ import {
 import { shortHash } from '../lib/evidence.js';
 import AuditTimeline from './AuditTimeline.jsx';
 
+const TERMINAL = new Set(['completed', 'error', 'refunded']);
+
 export default function MultisigPanel({ wallet, refreshKey }) {
   const [config, setConfig] = useState(null);
   const [rows, setRows] = useState(null);
@@ -55,6 +57,22 @@ export default function MultisigPanel({ wallet, refreshKey }) {
     load();
   }, [load, refreshKey]);
 
+  /**
+   * Anchor'da devam eden bir ödeme varken durumu yokla.
+   *
+   * Asıl yol `on_change_callback` (Vercel'de anchor bize ulaşır ve kaydı
+   * kendisi günceller); bu, localhost için yedek — orada anchor'ın erişebileceği
+   * bir URL yok. Terminal duruma gelince kendiliğinden duruyor.
+   */
+  useEffect(() => {
+    const pending = rows?.some(
+      (r) => r.payout?.anchorTransactionId && !TERMINAL.has(r.payout.status),
+    );
+    if (!pending) return;
+    const timer = setTimeout(load, 5000); // off-ramp tespiti 5 sn kadence'ında
+    return () => clearTimeout(timer);
+  }, [rows, load]);
+
   async function handleApprove(requestId) {
     setBusy(`approve-${requestId}`);
     setError(null);
@@ -84,6 +102,8 @@ export default function MultisigPanel({ wallet, refreshKey }) {
       await load();
 
       // Fiat bacağı: relayer anchor üzerinden tedarikçinin IBAN'ına öder.
+      // POST artık `completed` beklemiyor — USDC'yi gönderip dönüyor, çünkü
+      // serverless fonksiyonun süre tavanı off-ramp'in bitmesine yetmiyor.
       const res = await fetch('/api/payout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -91,7 +111,7 @@ export default function MultisigPanel({ wallet, refreshKey }) {
       });
       const payout = await res.json();
       if (!res.ok) throw new Error(payout.error);
-      await load();
+      await load(); // nihai durumu aşağıdaki yoklama getirecek
     } catch (e) {
       setError(e.message);
     } finally {

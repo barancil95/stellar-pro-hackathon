@@ -21,6 +21,7 @@ import {
   TransactionBuilder,
 } from '@stellar/stellar-sdk';
 import * as anchor from './anchor.js';
+import { linkAnchorTransaction } from './store.js';
 
 const HORIZON_URL = process.env.HORIZON_URL || 'https://horizon-testnet.stellar.org';
 const NETWORK_PASSPHRASE = process.env.NETWORK_PASSPHRASE || Networks.TESTNET;
@@ -49,12 +50,17 @@ export async function registerSupplier({ supplierId, iban, name }) {
 }
 
 /**
- * Tedarikçiye TRY öder. Dönüş: anchor transaction'ı (`completed` beklenmiş).
+ * Fiat bacağının BİRİNCİ fazı: kayıt → firm quote → withdraw → USDC gönder.
+ *
+ * Burada durup dönüyoruz. Eskiden bu fonksiyon anchor `completed` diyene kadar
+ * 180 sn polling yapıyordu; Vercel'de fonksiyon tavanı (Hobby'de 60 sn) o
+ * süreye yetmiyor ve istek timeout'a düşüyordu. Durum ikinci fazda geliyor:
+ * asıl yol `on_change_callback`, yedek yol `fetchPayoutStatus`.
  *
  * @param usdcAmount  ondalık string, ör. "5.0000000"
- * @param onProgress  ara durumları UI'a/loga vermek için
  */
-export async function payoutToSupplier({
+export async function startPayout({
+  requestId,
   supplierId,
   iban,
   supplierName,
@@ -65,6 +71,12 @@ export async function payoutToSupplier({
   const relayer = relayerKeypair();
   const h = await anchor.health();
   const ids = await anchor.assetIds();
+
+  // Limit dışı tutarı anchor'a gitmeden yakala — hata mesajı okunaklı olsun.
+  await anchor.assertOfframpAmount(usdcAmount);
+  if (h.treasury.low_balance) {
+    onProgress({ step: 'warn', message: 'anchor treasury düşük — off-ramp gecikebilir' });
+  }
 
   onProgress({ step: 'register', supplierId });
   const { session, sub } = await registerSupplier({ supplierId, iban, name: supplierName });
@@ -95,6 +107,12 @@ export async function payoutToSupplier({
     );
   }
 
+  // Köprüyü USDC'yi göndermeden ÖNCE kur: callback ödemeden saniyeler sonra
+  // gelebilir ve hangi talebe ait olduğunu bilemezse kayıt düşer.
+  if (requestId !== undefined && requestId !== null) {
+    await linkAnchorTransaction(withdrawal.id, requestId);
+  }
+
   onProgress({ step: 'send', to: withdrawal.account_id, memo: withdrawal.memo });
   const stellarTxHash = await sendUsdc({
     keypair: relayer,
@@ -104,11 +122,52 @@ export async function payoutToSupplier({
     memoId: withdrawal.memo,
   });
 
-  onProgress({ step: 'settle', stellarTxHash });
-  const settled = await anchor.pollTransaction(session, withdrawal.id, {
+  return {
+    anchorTransactionId: withdrawal.id,
+    sub,
+    supplierId,
+    quoteId: quote.id,
+    stellarTxHash,
+    memo: withdrawal.memo,
+    usdcSent: usdcAmount,
+    /// Firm quote'un vaat ettiği TRY — gerçekleşenle karşılaştırılacak.
+    tryQuoted: quote.buy_amount,
+    status: 'pending_anchor',
+  };
+}
+
+/**
+ * İKİNCİ faz, yedek yol: anchor'a tek bir durum sorusu sorar.
+ *
+ * `on_change_callback` çalışıyorsa buna gerek kalmaz (Vercel'de çalışır).
+ * Localhost'ta anchor bize ulaşamadığı için UI bunu çağırıyor.
+ */
+export async function fetchPayoutStatus({ supplierId, anchorTransactionId }) {
+  const session = anchor.makeSession(relayerKeypair(), { memo: supplierId });
+  const tx = await session.call((t) => anchor.getTransaction(t, anchorTransactionId));
+  return {
+    status: tx.status,
+    usdcSent: tx.amount_in ?? null,
+    tryPaid: tx.amount_out ?? null,
+    fee: tx.amount_fee ?? null,
+    /// Bankanın ödeme referansı — "para nereye gitti" sorusunun fiat tarafı.
+    bankReference: tx.external_transaction_id ?? null,
+    message: tx.message ?? null,
+  };
+}
+
+/**
+ * Başlat + bitene kadar bekle. Headless e2e için; HTTP route'u bunu
+ * KULLANMAZ (süre tavanı).
+ */
+export async function payoutToSupplier(args) {
+  const started = await startPayout(args);
+  const session = anchor.makeSession(relayerKeypair(), { memo: args.supplierId });
+
+  const settled = await anchor.pollTransaction(session, started.anchorTransactionId, {
     intervalMs: 5000, // off-ramp tespiti 5 sn kadence'ında
     timeoutMs: 180000,
-    onUpdate: (tx) => onProgress({ step: 'status', status: tx.status }),
+    onUpdate: (tx) => args.onProgress?.({ step: 'status', status: tx.status }),
   });
 
   if (settled.status !== 'completed') {
@@ -116,15 +175,11 @@ export async function payoutToSupplier({
   }
 
   return {
-    anchorTransactionId: settled.id,
-    sub,
-    quoteId: quote.id,
-    stellarTxHash,
-    memo: withdrawal.memo,
+    ...started,
+    status: settled.status,
     usdcSent: settled.amount_in,
     tryPaid: settled.amount_out,
     fee: settled.amount_fee,
-    /// Bankanın ödeme referansı — "para nereye gitti" sorusunun fiat tarafı.
     bankReference: settled.external_transaction_id,
   };
 }

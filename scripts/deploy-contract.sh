@@ -27,7 +27,18 @@ CONTRACT_ID=$(stellar contract deploy \
   --source admin "${NET[@]}" 2>/dev/null | tail -1)
 echo "   $CONTRACT_ID"
 
-echo "→ initialize (vault: null — DeFindex elendi, bkz. plan 10.1.a)"
+# Option<Address>: None → `null`, Some → JSON string olarak adres.
+# `--vault C...` (tırnaksız) ve `{"Some":…}` formlarının ikisi de CLI'da
+# reddediliyor — ölçüldü.
+if [ -n "${VAULT_ADDRESS:-}" ]; then
+  VAULT_ARG="\"$VAULT_ADDRESS\""
+  echo "→ initialize (vault: $VAULT_ADDRESS — fon DeFindex vault'unda duracak)"
+else
+  VAULT_ARG=null
+  echo "→ initialize (vault: null — fon escrow'da duracak)"
+  echo "   vault istiyorsanız önce: ./scripts/create-vault.sh"
+fi
+
 stellar contract invoke --id "$CONTRACT_ID" --source admin "${NET[@]}" -- initialize \
   --admin      "$(stellar keys address admin)" \
   --usdc_sac   "$USDC_SAC_ID" \
@@ -35,7 +46,7 @@ stellar contract invoke --id "$CONTRACT_ID" --source admin "${NET[@]}" -- initia
   --coord_a    "$(stellar keys address coord-a)" \
   --coord_b    "$(stellar keys address coord-b)" \
   --coord_c    "$(stellar keys address coord-c)" \
-  --vault      null >/dev/null
+  --vault      "$VAULT_ARG" >/dev/null
 
 sed -i '' "s|^POA_CONTRACT_ID=.*|POA_CONTRACT_ID=$CONTRACT_ID|" .env
 echo "✅ .env güncellendi: POA_CONTRACT_ID=$CONTRACT_ID"

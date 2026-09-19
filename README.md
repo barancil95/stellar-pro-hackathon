@@ -25,16 +25,18 @@ Tek komutla tekrarlanabilir:
 node scripts/e2e-m2.js
 ```
 
-Son koşu: 1.5 USDC bağış → talep #0 → coord A (1/2) → coord B (2/2) →
-`execute_payout` → firm quote → `withdraw-exchange` → **72.81 TRY**, banka
-referansı `FAST-SU71Q2OQLC`, tedarikçinin IBAN'ında.
+Son koşu: 4.5 USDC bağış → **DeFindex vault'una** → talep #1 (1.5 USDC) →
+coord A (1/2) → coord B (2/2) → `execute_payout` (vault payı bozduruldu,
+4.5 → 3 pay) → firm quote → `withdraw-exchange` → **72.81 TRY**, banka
+referansı `FAST-GAVX4PIA4O`, tedarikçinin IBAN'ında.
 
 | | |
 |---|---|
-| **Contract** | [`CCQFZVGSPEWYXYH3HUU43XKLVMK4GDP3LJJE6GMCNPONOTEEEHDM5OLN`](https://stellar.expert/explorer/testnet/contract/CCQFZVGSPEWYXYH3HUU43XKLVMK4GDP3LJJE6GMCNPONOTEEEHDM5OLN) |
+| **Contract** | [`CBFOPW6C3PDRXUV5DG3VI5WPGFPMNZKOVZSJWLHTQ3R6CJWVRHRSZ4XC`](https://stellar.expert/explorer/testnet/contract/CBFOPW6C3PDRXUV5DG3VI5WPGFPMNZKOVZSJWLHTQ3R6CJWVRHRSZ4XC) |
 | **Network** | Stellar Testnet · `Test SDF Network ; September 2015` |
 | **Anchor** | [tr-mock-anchor.fly.dev](https://tr-mock-anchor.fly.dev) (SEP-1/10/12/38/6) |
 | **USDC SAC** | `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA` |
+| **DeFindex vault** | [`CBJM2TT573QLVT6G6LHSNMI5HDMLRMPYIMBCCDQT2KZVK7CM5NJNPHFM`](https://stellar.expert/explorer/testnet/contract/CBJM2TT573QLVT6G6LHSNMI5HDMLRMPYIMBCCDQT2KZVK7CM5NJNPHFM) — opsiyonel, `VAULT_ADDRESS` boşsa kapalı |
 
 ---
 
@@ -42,14 +44,21 @@ referansı `FAST-SU71Q2OQLC`, tedarikçinin IBAN'ında.
 
 | # | Şart | Karşılığı |
 |---|---|---|
-| 1 | **Integration** — curated listeden bir protokol | **Stellar Wallets Kit** (`allowAllModules()`) — [`lib/wallet.js`](apps/web/lib/wallet.js) |
+| 1 | **Integration** — curated listeden bir protokol | **Stellar Wallets Kit** (`allowAllModules()`) — [`lib/wallet.js`](apps/web/lib/wallet.js) · **DeFindex** vault — [`create-vault.sh`](scripts/create-vault.sh), [`lib.rs`](contracts/poa_escrow/src/lib.rs) |
 | 2 | **Anchor / Local Payments** | **TR Mock Anchor**, SEP-1/10/12/38/6 — [`lib/anchor.js`](apps/web/lib/anchor.js) |
 | 3 | **Core Feature** — load-bearing | Anchor çıkarsa ürün ölür. Çok-cüzdan olmadan 2/3 onay çalışmaz: her koordinatör **kendi cüzdanıyla** imzalar. |
 
-DeFindex değerlendirildi ve **elendi**: testnet vault'unun asset'i
-(`CAQCFVLO…`) anchor'ın USDC SAC'ı (`CBIELTK6…`) ile eşleşmiyor, escrow fonu o
-vault'a yatırılamıyor. Contract yine de vault'a hazır yazıldı — ayrıntı
-[docs/architecture.md](docs/architecture.md#vault-kapısı).
+**DeFindex** entegre. Hazır `usdc_paltalabs_vault` gerçekten kullanılamıyor —
+asset'i BlendUSDC (`CAQCFVLO…`), anchor'ın USDC SAC'ı (`CBIELTK6…`) değil. Ama
+factory kendi vault'umuzu kurmamıza izin veriyor:
+[`scripts/create-vault.sh`](scripts/create-vault.sh) anchor'ın SAC'ı üzerine
+bir vault deploy ediyor, escrow fonu orada tutup pay (share) sayıyor.
+
+Dürüst sınır: o SAC için deploy edilmiş bir DeFindex stratejisi olmadığı için
+**testnet'te getiri sıfır** — fon vault'ta atıl durur. Kazanç mimari: escrow
+standart bir vault arayüzünde pozisyon tutuyor ve `VAULT_ADDRESS` boş
+bırakılırsa eski davranışa (fon escrow'da) tek satırla dönülüyor. Mainnet'te
+aynı kod Circle USDC + Blend stratejisiyle getiri üretir.
 
 ---
 
@@ -64,6 +73,10 @@ imzalayamaz, HTTP isteği atamaz. Fiat bacağı zorunlu olarak zincir dışıdı
 
 **IBAN zincire yazılmaz.** Ledger'da yalnızca `supplier_ref = sha256(iban|salt)`
 durur. IBAN ↔ SEP-10 memo eşleşmesi backend'de.
+
+**Bilerek açık:** `create_request` yetki istemiyor — talep açmak para
+hareket ettirmiyor, çıkış 2/3 onaya bağlı. Bedeli ve savunması
+[docs/architecture.md](docs/architecture.md#2-neden-relayer-var) içinde.
 
 Ayrıntılı tasarım ve tradeoff'lar: **[docs/architecture.md](docs/architecture.md)**
 
@@ -88,6 +101,9 @@ stellar tx new change-trust --source relayer \
 
 cp .env.example .env    # secret'ları `stellar keys show <ad>` ile doldurun
 npm install
+node scripts/onramp.js relayer 500    # anchor'ın on-ramp'inden gerçek USDC
+node scripts/onramp.js donor  3000
+./scripts/create-vault.sh             # opsiyonel — DeFindex vault'u, .env'e yazar
 ./scripts/deploy-contract.sh          # deploy + initialize, .env'i günceller
 
 cd apps/web && npm install && npm run dev
@@ -97,11 +113,18 @@ cd apps/web && npm install && npm run dev
 yalnızca sunucu tarafı route'larda okunur; client bundle'ında secret bulunmadığı
 her build'de doğrulanır.
 
-USDC gerekiyorsa faucet'e gerek yok — anchor'ın kendi on-ramp'i veriyor:
+USDC gerekiyorsa faucet'e gerek yok — anchor'ın kendi on-ramp'i veriyor
+(`scripts/onramp.js`, yukarıda). Akışı adım adım görmek için:
 
 ```bash
 node scripts/anchor-tour.js    # SEP-10 → SEP-12 → SEP-6 deposit → completed
 ```
+
+**Deployment (Vercel).** `lib/store.js` tedarikçi ↔ IBAN ↔ memo eşleşmesini
+tutuyor ve bu veri isteklere göre kalıcı olmak zorunda. Vercel'de dosya sistemi
+salt okunur olduğundan Upstash Redis gerekiyor: Vercel Marketplace → Upstash →
+Redis, `KV_REST_API_URL` ve `KV_REST_API_TOKEN` otomatik yazılır. Değişkenler
+boşsa kod dosyaya düşer ve **yalnızca localhost'ta** çalışır.
 
 ---
 
@@ -133,14 +156,20 @@ beklerdi. Trustline başına 0.5 XLM rezerv gerekir.
 
 ## Testler
 
-**Contract — 22/22 geçiyor** (`cargo test`):
+**Contract — 29/29 geçiyor** (`cargo test`):
 
 ```
 deposit · birikim · SAC transfer · geçersiz tutar
 mükerrer oy · yabancı onay · imzasız onay · eşik altı ödeme
 talepler arası onay sızıntısı · mükerrer ödeme · yetersiz bakiye
-tek seferlik initialize · relayer değişimi · vault reddi
+tek seferlik initialize · relayer değişimi
+vault: yatırım · pay bozdurma · getiri · vault kapalıyken eski davranış
 ```
+
+Vault testleri gerçek DeFindex vault'unun **auth davranışını** taklit eden bir
+mock'a karşı koşuyor. `authorize_as_current_contract` satırı silindiğinde altı
+test `Error(Auth, InvalidAction)` ile düşüyor — yani o satırın yük taşıdığı
+ölçülerek doğrulandı, varsayılmadı.
 
 En kritik olanı `same_coordinator_cannot_approve_twice`: tek koordinatör iki kez
 onaylayıp eşiği kendi başına geçemiyor. Sadece `approvals_count` tutsaydık bu
@@ -188,7 +217,9 @@ apps/web/
   components/          Bağış · Saha talebi · Çoklu imza · Denetim izi
 scripts/
   anchor-tour.js       M0 keşif turu — gerçek on-ramp
+  onramp.js            hesaba anchor üzerinden USDC al
   e2e-m2.js            uçtan uca acceptance, tek komut
+  create-vault.sh      DeFindex vault'u (anchor USDC SAC'ı üzerine)
   deploy-contract.sh   build + deploy + initialize
 ```
 

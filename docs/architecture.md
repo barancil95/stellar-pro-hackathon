@@ -36,6 +36,15 @@ almaz**, `Config`'ten okur. Alsaydı 2/3 onaydan sonra çağıran taraf fonu
 istediği adrese yönlendirebilirdi. Relayer'ı değiştirmek yalnızca admin'in
 imzasıyla mümkün (`update_relayer`).
 
+**Bilerek açık bırakılan yer: `create_request` yetki istemez.** Sahadaki
+erişimi kısıtlamak istemedik ve talep açmak tek başına para hareket ettirmiyor
+— çıkış 2/3 onaya bağlı. Bedeli şu: herkes talep açabilir, yani talep listesi
+spam'lenebilir ve koordinatörlerin yanlış talebi onaylama riski doğar. Savunma
+ekranda: her talep kanıt hash'i ve tedarikçi referansıyla geliyor, koordinatör
+onaylamadan önce bunları görüyor. Üretimde buraya bir saha-aktörü whitelist'i
+veya talep başına küçük bir depozito gelir; hackathon kapsamında dışarıda
+bıraktık.
+
 ---
 
 ## 3. Contract
@@ -125,24 +134,62 @@ istenmiyor ve doğrudan polling'e düşülüyor.
 
 ---
 
-## 5. Vault kapısı
+## 5. DeFindex vault
 
-DeFindex **elendi**: testnet vault'unun asset'i (`CAQCFVLO…`) anchor'ın USDC
-SAC'ı (`CBIELTK6…`) değil. Escrow fonu o vault'a yatırılamaz.
+Fon, `VAULT_ADDRESS` doluysa escrow'da beklemez: escrow'un adına bir DeFindex
+vault'unda durur ve escrow pay (share) tutar.
 
-Contract yine de vault'a hazır yazıldı, çünkü maliyeti sıfırdı:
+### Neden hazır vault değil
 
-1. `Campaign.principal` ve `.shares` ayrı alanlar — vault kapalıyken `shares` 0.
-2. `initialize` baştan `vault: Option<Address>` alıyor. Sonradan parametre
-   eklemek deploy'u ve tüm çağrıları bozardı.
-3. Bakiye okuma tek `available_balance()` fonksiyonunda.
+Testnet'teki `usdc_paltalabs_vault` BlendUSDC tutuyor
+(`CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU`), anchor'ın USDC
+SAC'ını (`CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA`) değil.
+Bu doğru bir tespitti ama yanlış sonuca götürmüştü ("DeFindex elenir"). Eksik
+olan nokta: factory kendi vault'umuzu kurmamıza izin veriyor.
+[`scripts/create-vault.sh`](../scripts/create-vault.sh) `create_defindex_vault`
+çağrısını anchor'ın SAC'ıyla yapıyor.
 
-Asset'i eşleşen bir vault çıkarsa değişecek yer: `available_balance`'ın `Some`
-dalı, `deposit`'te share kaydı, `execute_payout`'ta share bozdurma. Tahmini
-40-50 satır.
+### Strateji listesi neden boş
 
-Şu an `Some(vault)` verilirse contract sessizce yanlış bakiye dönmek yerine
-`VaultNotSupported` hatası veriyor.
+O SAC için deploy edilmiş bir DeFindex stratejisi yok — stratejiler Blend'in
+test USDC'sine bağlı. Vault contract'ının `validate_strategies` fonksiyonu boş
+listeyi kabul ediyor (yalnızca tekrarı reddediyor), dolayısıyla stratejisiz
+vault geçerli.
+
+**Sonucu saklamıyoruz: testnet'te getiri sıfırdır.** Fon vault'ta atıl durur ve
+UI'daki getiri satırı `0.0000000` gösterir. Kazanç mimari:
+
+- Custody escrow'da kalır; vault pozisyonu da contract'ın adınadır.
+- Bakiye tek bir yerden okunur, fon nerede olursa olsun.
+- Mainnet'te tek değişen adreslerdir — Circle USDC + Blend stratejisi — ve aynı
+  kod getiri üretir.
+
+Getiri argümanını abartmamanın somut karşılığı: 1000 $ iki günde ~22 sent.
+Afet-öncesi fonlama (para aylarca bekler, oracle tetikler) roadmap'te kalıyor.
+
+### Contract tarafı
+
+`initialize` baştan `vault: Option<Address>` alıyordu, o yüzden entegrasyon
+deploy yüzeyini bozmadı:
+
+1. `Campaign.principal` ve `.shares` ayrı — vault kapalıyken `shares` 0 kalır.
+2. `deposit` fonu vault'a yatırır, dönen payı `shares`'e ekler.
+3. `execute_payout` önce payı bozdurur, sonra relayer'a öder.
+4. `available_balance()` vault açıkken payın **bugünkü karşılığını** okur —
+   getiri varsa bakiye anaparayı aşar.
+
+**Kritik ayrıntı — `authorize_as_current_contract`.** Vault, USDC'yi escrow'un
+üzerinden kendine çekiyor. Bu transfer escrow adına ama escrow'un doğrudan
+çağrısı değil (araya vault giriyor), dolayısıyla contract'ın o alt-çağrıya
+açıkça yetki vermesi gerekiyor. Satır olmadan deposit `Error(Auth,
+InvalidAction)` ile düşüyor. Test mock'u gerçek vault'un auth davranışını
+taklit ediyor ve satır kaldırıldığında altı test düşüyor — ölçüldü.
+
+### Geri dönüş
+
+`VAULT_ADDRESS` boşsa `initialize --vault null` ile eski davranış aynen
+geçerli: fon escrow'da durur, `shares` 0 kalır. Vault tarafı arızalanırsa
+kaçış yolu tek satır.
 
 ---
 

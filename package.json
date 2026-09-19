@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "anchor:tour": "node scripts/anchor-tour.js",
-    "deploy": "node scripts/deploy-contract.js"
+    "deploy": "./scripts/deploy-contract.sh",
+    "vault:create": "./scripts/create-vault.sh",
+    "e2e": "node scripts/e2e-m2.js"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^14.2.0",

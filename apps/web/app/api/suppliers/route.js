@@ -14,7 +14,7 @@ function validTurkishIban(raw) {
 }
 
 export async function GET() {
-  return NextResponse.json({ suppliers: listSuppliers() });
+  return NextResponse.json({ suppliers: await listSuppliers() });
 }
 
 export async function POST(request) {
@@ -31,7 +31,7 @@ export async function POST(request) {
     return NextResponse.json({ error: 'Tedarikçi adı gerekli' }, { status: 400 });
   }
 
-  const { supplierId, supplierRef, name: stored } = registerSupplierRecord({
+  const { supplierId, supplierRef, name: stored } = await registerSupplierRecord({
     name: name.trim(),
     iban: normalized,
   });

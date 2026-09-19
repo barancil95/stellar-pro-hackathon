@@ -8,6 +8,27 @@ import { fromStroops, explorerTx } from '../lib/soroban.js';
 import { shortHash } from '../lib/evidence.js';
 
 /**
+ * Talep anında gösterge quote, ödeme anında firm quote alınıyor (plan 5.5).
+ * Arada kur oynarsa tedarikçiye ulaşan TRY talep edilenden farklı olur —
+ * denetim izinin bunu göstermesi gerekir, yoksa "para nereye gitti" sorusunun
+ * cevabı eksik kalır.
+ */
+function driftOf(requestedTry, tryPaid) {
+  const requested = Number(requestedTry);
+  const paid = Number(tryPaid);
+  if (!(requested > 0) || !(paid > 0)) return null;
+
+  const delta = paid - requested;
+  if (Math.abs(delta) < 0.005) return null; // kuruş altı — gürültü
+  return {
+    requested: requested.toFixed(2),
+    delta: `${delta > 0 ? '+' : ''}${delta.toFixed(2)}`,
+    pct: `${delta > 0 ? '+' : ''}${((delta / requested) * 100).toFixed(2)}%`,
+    negative: delta < 0,
+  };
+}
+
+/**
  * "Para nereye gitti?" — zincirdeki ve anchor'daki gerçek duruma bakar,
  * uydurma adım yok. Tamamlanmamış adım soluk gösterilir.
  */
@@ -50,8 +71,13 @@ export default function AuditTimeline({ request, approvalCount, payout, note }) 
       label: 'TRY ödendi',
       detail: payout?.bankReference
         ? `${payout.tryPaid} TRY · banka ref ${payout.bankReference}`
-        : 'bekliyor',
+        : payout?.status && payout.status !== 'completed'
+          ? `anchor: ${payout.status}`
+          : 'bekliyor',
       done: Boolean(payout?.bankReference),
+      // Talep anındaki kur ile ödeme anındaki kur aynı olmak zorunda değil.
+      // Sapmayı gizlemek yerine gösteriyoruz.
+      drift: driftOf(note?.requestedTry, payout?.tryPaid),
     },
   ];
 
@@ -89,6 +115,14 @@ export default function AuditTimeline({ request, approvalCount, payout, note }) 
                   </a>
                 )}
               </div>
+              {s.drift && (
+                <div className="font-mono text-xs text-muted">
+                  talep {s.drift.requested} TRY → fark{' '}
+                  <span className={s.drift.negative ? 'text-signal' : 'text-verified'}>
+                    {s.drift.delta} TRY ({s.drift.pct})
+                  </span>
+                </div>
+              )}
             </div>
           </li>
         ))}

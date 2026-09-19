@@ -6,3 +6,4 @@ target/
 *.wasm
 .DS_Store
 target/
+data/

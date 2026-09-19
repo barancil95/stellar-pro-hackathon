@@ -91,6 +91,9 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
           requestId: Number(requestId),
           need: need.trim(),
           supplierName: supplierName.trim(),
+          // Zincire USDC yazıldı; kullanıcının gördüğü TRY bu. Ödeme anında
+          // kur yeniden fiyatlanacağı için ikisi denetim izinde karşılaştırılır.
+          requestedTry: tryAmount,
         }),
       });
 

@@ -65,6 +65,9 @@ async function main() {
   log('contract :', CONTRACT_ID);
   log('tutar    :', AMOUNT_USDC, 'USDC');
 
+  const before = await readEscrow();
+  log('vault    :', before.vault ?? 'kapalı — fon escrow\'da durur');
+
   step(1, 'Tedarikçi kaydı — IBAN backend\'de, zincire hash\'i gider');
   const supplier = await api('/api/suppliers', {
     name: 'ABC Akaryakıt',
@@ -73,10 +76,14 @@ async function main() {
   log('supplierId :', supplier.supplierId);
   log('supplierRef:', supplier.supplierRef.slice(0, 24) + '…');
 
-  step(2, 'Bağış — escrow\'a USDC');
+  step(2, before.vault ? 'Bağış — escrow üzerinden DeFindex vault\'una' : 'Bağış — escrow\'a USDC');
   const depositHash = await deposit({ ...as(donor), amount: AMOUNT_USDC });
   log('tx :', explorerTx(depositHash));
-  log('escrow bakiyesi:', fromStroops((await readEscrow()).balance), 'USDC');
+  const afterDeposit = await readEscrow();
+  log('ödenebilir bakiye:', fromStroops(afterDeposit.balance), 'USDC');
+  if (before.vault) {
+    log('vault payı       :', fromStroops(afterDeposit.campaign.shares), 'pay');
+  }
 
   step(3, 'Talep — ihtiyaç kanıtı hash\'iyle');
   const proofHash = Buffer.from(
@@ -107,16 +114,40 @@ async function main() {
   await approveRequest({ ...as(coordB), requestId });
   log('  onay sayısı:', (await readRequest(requestId)).approvals_count, '/ 2 ✓');
 
-  step(5, 'execute_payout — fon relayer\'a (hedef contract\'ta sabit)');
+  step(
+    5,
+    before.vault
+      ? 'execute_payout — vault payı bozdurulur, fon relayer\'a'
+      : 'execute_payout — fon relayer\'a (hedef contract\'ta sabit)',
+  );
   const payoutHash = await executePayout({ ...as(donor), requestId });
   log('tx :', explorerTx(payoutHash));
   log('talep completed:', (await readRequest(requestId)).completed);
+  if (before.vault) {
+    const afterPayout = await readEscrow();
+    log('kalan vault payı:', fromStroops(afterPayout.campaign.shares), 'pay');
+  }
 
   step(6, 'Fiat bacağı — anchor üzerinden tedarikçinin IBAN\'ına');
-  const payout = await api('/api/payout', { requestId: Number(requestId) });
-  log('anchor tx  :', payout.anchorTransactionId);
-  log('SEP-10 sub :', payout.sub, '← memo kapsamı');
-  log('quote      :', payout.quoteId);
+  const started = await api('/api/payout', { requestId: Number(requestId) });
+  log('anchor tx  :', started.anchorTransactionId);
+  log('USDC gitti :', explorerTx(started.stellarTxHash), `memo ${started.memo}`);
+
+  // POST artık `completed` beklemiyor (serverless süre tavanı). Durumu
+  // GET yoklar — Vercel'de bunu on_change_callback zaten yapmış olur.
+  const TERMINAL = new Set(['completed', 'error', 'refunded']);
+  let payout = started;
+  for (let i = 0; i < 40 && !TERMINAL.has(payout.status); i += 1) {
+    await new Promise((r) => setTimeout(r, 5000));
+    payout = await api(`/api/payout?requestId=${requestId}`);
+    log('durum      :', payout.status);
+  }
+  if (payout.status !== 'completed') {
+    throw new Error(`Off-ramp tamamlanmadı: ${payout.status}`);
+  }
+
+  log('SEP-10 sub :', started.sub, '← memo kapsamı');
+  log('quote      :', started.quoteId, `(vaat ${started.tryQuoted} TRY)`);
   log('USDC       :', payout.usdcSent);
   log('TRY        :', payout.tryPaid, `(komisyon ${payout.fee})`);
   log('banka ref  :', payout.bankReference);

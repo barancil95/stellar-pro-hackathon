@@ -413,10 +413,18 @@ başlamadan hazır olsun.
 
 ---
 
-### ~~M3.5 — DeFindex vault~~ ⛔ ATLANDI
+### M3.5 — DeFindex vault ✅ YAPILDI (M4 sonrası)
 
-M0'daki vault kontrolü **kırmızı** çıktı: vault'un asset'i anchor'ın USDC SAC'ı
-değil (bkz. 10.1.a). Wallets Kit savunmasıyla devam.
+M0'daki kontrol hazır vault için kırmızıydı ama sonucu yanlış okumuştuk
+(bkz. 10.1.a). Kendi vault'umuzu kurduk:
+
+- [`scripts/create-vault.sh`](scripts/create-vault.sh) — factory'den vault,
+  anchor USDC SAC'ı üzerine, tohum yatırımıyla
+- `deposit` → vault'a yatırır, pay kaydeder · `execute_payout` → pay bozdurur
+- `available_balance()` payın bugünkü karşılığını okur
+- `authorize_as_current_contract` — vault'un escrow üzerinden yaptığı token
+  çekişi için; olmadan `Error(Auth, InvalidAction)`
+- 7 yeni contract testi (mock vault, gerçek auth davranışıyla)
 
 ---
 
@@ -504,9 +512,14 @@ Bölünme M1'in başında. Dördü birden contract'a dalarsa relayer geceye kal�
 **Vault'suz başla, vault'a hazır yaz.** Bölüm 4.1'deki üç kural uygulanırsa
 sonradan eklemek ~40-50 satır ve 2-3 saat.
 
-### 10.1.a ⛔ M0 SONUCU: DeFindex ELENDİ — asset eşleşmedi
+### 10.1.a ⚠️ M0 SONUCU DÜZELTİLDİ — DeFindex entegre edildi
 
-10.2'deki kontrol çalıştırıldı, **kırmızı**:
+> **Bu bölüm sonradan düzeltildi.** M0'da "elendi" yazılmıştı; ölçüm doğruydu
+> ama sonuç yanlıştı. Hazır vault kullanılamıyor — ama factory'den **kendi
+> vault'umuzu** kurabiliyoruz. `create_defindex_vault` anchor'ın SAC'ıyla
+> çağrıldı ve geçti. Bkz. [`scripts/create-vault.sh`](scripts/create-vault.sh).
+
+10.2'deki kontrol çalıştırıldı, **kırmızı** — hazır vault için doğru:
 
 ```
 vault get_assets  → CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU
@@ -514,15 +527,20 @@ anchor USDC SAC   → CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA
 ```
 
 `usdc_paltalabs_vault` **başka bir USDC** tutuyor (Blend'in kendi testnet
-USDC'si), anchor'ın Circle testnet USDC'sini değil. Escrow'daki fonu bu vault'a
-yatıramayız.
+USDC'si), anchor'ın Circle testnet USDC'sini değil. Escrow'daki fonu **bu**
+vault'a yatıramayız.
 
-**Karar: DeFindex tamamen bırakıldı. M3.5 atlanıyor.** Integration şartı
-(bölüm 0, #1) **Stellar Wallets Kit** ile karşılanıyor — zaten tek başına
-yeterliydi.
+**Atlanan soru:** hazır vault'a girmek zorunda mıyız? Hayır. Factory
+(`CDSCWE4GLNBYYTES2OCYDFQA2LLY4RBIAX6ZI32VSUXD7GO6HRPO4A32`) istediğimiz asset
+üzerine vault kuruyor ve boş strateji listesini kabul ediyor (vault
+contract'ında `validate_strategies` yalnızca tekrarı reddediyor).
 
-Contract yine de bölüm 4.1'deki üç kurala göre **vault'a hazır** yazılıyor:
-maliyeti sıfır, mainnet'te asset eşleşen bir vault çıkarsa kapı açık kalıyor.
+**Düzeltilmiş karar: DeFindex entegre, opsiyonel.** `VAULT_ADDRESS` doluysa fon
+vault'ta, boşsa escrow'da. Integration şartı (bölüm 0, #1) artık iki protokolle
+karşılanıyor.
+
+**Dürüst sınır:** o SAC için strateji olmadığından **testnet'te getiri sıfır**.
+Gerekçe bölüm 10.5'teki gibi mimari — zaten öyle planlanmıştı.
 
 ### 10.2 M0'daki kontrol (30 dk)
 

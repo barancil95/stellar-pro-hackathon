@@ -101,6 +101,36 @@ export function makeSession(keypair, { memo } = {}) {
   };
 }
 
+/* -------------------------------- limitler ------------------------------- */
+
+/**
+ * `/health`'teki limitler `null` gelebilir — o zaman limit uygulanmıyor demek.
+ * Sabit 50/3000 TRY tavanı VARSAYMAYIN (SKILL.md); okunanı uygulayın.
+ * Ölçüldüğünde üçü de null'dı, ama sandbox sıfırlanınca değişebilir.
+ */
+export async function assertOfframpAmount(usdcAmount) {
+  const { limits } = await health();
+  const min = limits?.min_offramp_usdc;
+  if (min != null && Number(usdcAmount) < Number(min)) {
+    throw new Error(
+      `Off-ramp alt sınırı ${min} USDC — ${usdcAmount} USDC ile withdraw açılamaz`,
+    );
+  }
+}
+
+export async function assertOnrampAmount(tryAmount) {
+  const { limits } = await health();
+  const amount = Number(tryAmount);
+  const min = limits?.min_onramp_try;
+  const max = limits?.max_onramp_try;
+  if (min != null && amount < Number(min)) {
+    throw new Error(`On-ramp alt sınırı ${min} TRY — ${tryAmount} TRY kabul edilmez`);
+  }
+  if (max != null && amount > Number(max)) {
+    throw new Error(`On-ramp üst sınırı ${max} TRY — ${tryAmount} TRY kabul edilmez`);
+  }
+}
+
 /* ------------------------------- SEP-12 KYC ------------------------------ */
 
 export async function getCustomer(token) {
