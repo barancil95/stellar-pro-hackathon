@@ -59,6 +59,8 @@ export async function POST(request) {
     const supplierRef = Buffer.from(onChain.supplier_ref).toString('hex');
     const supplier = await findBySupplierRef(supplierRef);
     if (!supplier) {
+      // `return` catch'e düşmez; kilit burada bırakılmazsa talep 10 dk kilitli kalır.
+      await releasePayoutLock(requestId);
       return NextResponse.json(
         { error: `supplier_ref ${supplierRef.slice(0, 12)}… kayıtlı değil` },
         { status: 404 },

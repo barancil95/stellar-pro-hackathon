@@ -95,12 +95,51 @@ function fileDriver() {
   const { dirname, join } = require('node:path');
 
   const FILE = join(process.cwd(), 'data', 'store.json');
-  const read = () => {
-    try {
-      return JSON.parse(readFileSync(FILE, 'utf8'));
-    } catch {
-      return { kv: {}, index: [], seq: 0 };
+  const empty = () => ({ kv: {}, index: [], seq: 0 });
+
+  /**
+   * Eski sürümün store.json'ı ({suppliers, payouts, notes, nextSupplierId})
+   * `kv`'ye taşınır. Taşınmazsa o dönemde açılmış talepler "tedarikçi kayıtlı
+   * değil" verir, daha kötüsü ödenmiş talepler ödenmemiş görünür ve ikinci kez
+   * off-ramp'e açılabilir. Mevcut `kv` anahtarlarının üzerine yazılmaz.
+   */
+  const migrate = (s) => {
+    if (!Array.isArray(s.suppliers)) return s;
+    const put = (key, value) => {
+      if (s.kv[key] === undefined) s.kv[key] = value;
+    };
+    for (const sup of s.suppliers) {
+      put(K.supplier(sup.supplierRef), sup);
+      put(K.supplierByIban(sup.iban), sup.supplierRef);
+      s.index = [...new Set([...s.index, sup.supplierRef])];
     }
+    for (const [id, old] of Object.entries(s.payouts || {})) {
+      // Eski sürüm yalnızca `completed` olunca yazıyordu ve `status`/`supplierId`
+      // tutmuyordu; ikisi de yeni GET yolunda gerekli.
+      const payout = {
+        ...old,
+        status: old.status ?? (old.bankReference ? 'completed' : undefined),
+        supplierId: old.supplierId ?? (Number(String(old.sub || '').split(':')[1]) || undefined),
+      };
+      put(K.payout(id), payout);
+      if (payout.anchorTransactionId) put(K.requestOfAnchorTx(payout.anchorTransactionId), id);
+    }
+    for (const [id, note] of Object.entries(s.notes || {})) put(K.note(id), note);
+    if (s.nextSupplierId) s.seq = Math.max(s.seq, s.nextSupplierId - FIRST_SUPPLIER_ID);
+
+    const { suppliers, payouts, notes, anchorStatus, nextSupplierId, ...rest } = s;
+    write(rest);
+    return rest;
+  };
+
+  const read = () => {
+    let raw;
+    try {
+      raw = JSON.parse(readFileSync(FILE, 'utf8'));
+    } catch {
+      return empty();
+    }
+    return migrate({ ...empty(), ...raw });
   };
   const write = (state) => {
     mkdirSync(dirname(FILE), { recursive: true });
