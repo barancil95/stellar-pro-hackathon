@@ -3,7 +3,14 @@
 import { useEffect, useState, useCallback } from 'react';
 import { ArrowUpRight, Loader2, ShieldCheck } from 'lucide-react';
 import { signer } from '../lib/wallet.js';
-import { deposit, readEscrow, fromStroops, explorerTx, CONTRACT_ID, explorerContract } from '../lib/soroban.js';
+import {
+  deposit,
+  readEscrow,
+  fromStroops,
+  explorerTx,
+  CONTRACT_ID,
+  explorerContract,
+} from '../lib/soroban.js';
 import { usdcPosition, openUsdcTrustline } from '../lib/stellar-account.js';
 import { TestnetHint } from './WalletButton.jsx';
 
@@ -82,10 +89,12 @@ export default function DonorPanel({ wallet, issuer }) {
         </a>
       </header>
 
-      <div className="mb-6 grid grid-cols-2 gap-3">
+      <div className="mb-4 grid grid-cols-2 gap-3">
         <Stat label="Escrow bakiyesi" value={escrow ? fromStroops(escrow.balance) : '—'} unit="USDC" accent />
         <Stat label="Ödenen" value={escrow ? fromStroops(escrow.campaign.disbursed) : '—'} unit="USDC" />
       </div>
+
+      {escrow?.vault && <VaultLine escrow={escrow} />}
 
       {!wallet ? (
         <>
@@ -169,6 +178,42 @@ export default function DonorPanel({ wallet, issuer }) {
         </p>
       )}
     </section>
+  );
+}
+
+/**
+ * Fon vault'taysa tek satırda söyle: bakiye artık token bakiyesi değil,
+ * elde tutulan payın karşılığı.
+ *
+ * Getiri testnet'te 0 — o SAC için strateji yok. Bunu gizlemiyoruz; satır
+ * "0.0000000" gösterecek. Dürüst olan bu, ve mainnet'te aynı satır dolacak.
+ */
+function VaultLine({ escrow }) {
+  const principal = BigInt(escrow.campaign.principal ?? 0);
+  const disbursed = BigInt(escrow.campaign.disbursed ?? 0);
+  const yieldStroops = BigInt(escrow.balance ?? 0) - (principal - disbursed);
+
+  return (
+    <div className="mb-6 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-xl border border-edge bg-ink px-4 py-3 text-xs">
+      <span className="text-muted">
+        DeFindex vault'unda ·{' '}
+        <a
+          href={explorerContract(escrow.vault)}
+          target="_blank"
+          rel="noreferrer"
+          className="font-mono hover:text-white"
+        >
+          {escrow.vault.slice(0, 6)}…{escrow.vault.slice(-4)}
+        </a>
+      </span>
+      <span className="font-mono text-muted">
+        {fromStroops(escrow.campaign.shares)} pay · getiri{' '}
+        <span className={yieldStroops > 0n ? 'text-verified' : ''}>
+          {fromStroops(yieldStroops)}
+        </span>{' '}
+        USDC
+      </span>
+    </div>
   );
 }
 

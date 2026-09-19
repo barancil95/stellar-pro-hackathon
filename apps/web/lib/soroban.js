@@ -78,15 +78,19 @@ export function resetClientCache() {
 
 export async function readEscrow() {
   const client = await escrowClient();
-  const [balance, campaign, count] = await Promise.all([
+  const [balance, campaign, count, config] = await Promise.all([
     client.balance().then((t) => t.result),
     client.get_campaign().then((t) => t.result),
     client.request_count().then((t) => t.result),
+    client.get_config().then((t) => t.result),
   ]);
   return {
     balance: unwrap(balance),
     campaign: unwrap(campaign),
     requestCount: count,
+    // Option<Address> → adres veya undefined. Doluysa fon escrow'da değil,
+    // DeFindex vault'unda duruyor ve `balance` payın karşılığı.
+    vault: unwrap(config).vault ?? null,
   };
 }
 
