@@ -60,6 +60,12 @@ impl Ctx {
     fn proof(&self, b: u8) -> BytesN<32> {
         BytesN::from_array(&self.env, &[b; 32])
     }
+    /// Eşiği geçiren iki ayrı koordinatör onayı.
+    fn approve_two(&self, id: u64) {
+        let c = self.client();
+        c.approve_request(&self.coords[0], &id);
+        c.approve_request(&self.coords[1], &id);
+    }
 }
 
 /* --------------------------------- deposit -------------------------------- */
@@ -146,6 +152,7 @@ fn payout_sends_to_configured_relayer() {
 
     let amount = 250_0000000;
     let id = c.create_request(&ctx.proof(1), &amount, &ctx.proof(2));
+    ctx.approve_two(id);
     c.execute_payout(&id);
 
     assert_eq!(ctx.usdc().balance(&ctx.relayer), amount, "fon relayer'a gitti");
@@ -162,6 +169,7 @@ fn payout_cannot_run_twice() {
     c.deposit(&ctx.donor, &DEPOSIT);
 
     let id = c.create_request(&ctx.proof(1), &100_0000000, &ctx.proof(2));
+    ctx.approve_two(id);
     c.execute_payout(&id);
 
     assert_eq!(
@@ -179,6 +187,7 @@ fn payout_rejects_amount_above_balance() {
     c.deposit(&ctx.donor, &(10_0000000));
 
     let id = c.create_request(&ctx.proof(1), &(20_0000000), &ctx.proof(2));
+    ctx.approve_two(id);
     assert_eq!(
         c.try_execute_payout(&id),
         Err(Ok(Error::InsufficientBalance))
@@ -192,6 +201,132 @@ fn payout_fails_for_unknown_request() {
     assert_eq!(
         ctx.client().try_execute_payout(&42),
         Err(Ok(Error::RequestNotFound))
+    );
+}
+
+/* ------------------------------ approve_request --------------------------- */
+
+#[test]
+fn approvals_accumulate_per_coordinator() {
+    let ctx = setup();
+    let c = ctx.client();
+    let id = c.create_request(&ctx.proof(1), &(10_0000000), &ctx.proof(2));
+
+    assert!(!c.has_approved(&id, &ctx.coords[0]));
+    c.approve_request(&ctx.coords[0], &id);
+    assert!(c.has_approved(&id, &ctx.coords[0]));
+    assert_eq!(c.get_request(&id).approvals_count, 1);
+
+    c.approve_request(&ctx.coords[1], &id);
+    assert_eq!(c.get_request(&id).approvals_count, 2);
+    assert!(!c.has_approved(&id, &ctx.coords[2]), "üçüncü onaylamadı");
+}
+
+/// Asıl tehlike: tek koordinatörün iki kez onaylayıp eşiği tek başına geçmesi.
+/// Sadece `approvals_count` tutsaydık bu mümkün olurdu (plan 4.2).
+#[test]
+fn same_coordinator_cannot_approve_twice() {
+    let ctx = setup();
+    let c = ctx.client();
+    c.deposit(&ctx.donor, &DEPOSIT);
+    let id = c.create_request(&ctx.proof(1), &(10_0000000), &ctx.proof(2));
+
+    c.approve_request(&ctx.coords[0], &id);
+    assert_eq!(
+        c.try_approve_request(&ctx.coords[0], &id),
+        Err(Ok(Error::AlreadyApproved))
+    );
+    assert_eq!(c.get_request(&id).approvals_count, 1, "sayaç artmamalı");
+    assert_eq!(
+        c.try_execute_payout(&id),
+        Err(Ok(Error::InsufficientApprovals)),
+        "tek koordinatör kendi başına ödeme çıkaramamalı"
+    );
+}
+
+#[test]
+fn outsider_cannot_approve() {
+    let ctx = setup();
+    let c = ctx.client();
+    let id = c.create_request(&ctx.proof(1), &(10_0000000), &ctx.proof(2));
+
+    let stranger = Address::generate(&ctx.env);
+    assert_eq!(
+        c.try_approve_request(&stranger, &id),
+        Err(Ok(Error::NotACoordinator))
+    );
+    assert_eq!(c.get_request(&id).approvals_count, 0);
+}
+
+/// Onay koordinatörün kendi imzasını gerektirir — başkası onun adına onaylayamaz.
+#[test]
+fn approval_requires_the_coordinator_signature() {
+    let ctx = setup();
+    let id = ctx
+        .client()
+        .create_request(&ctx.proof(1), &(10_0000000), &ctx.proof(2));
+
+    ctx.env.set_auths(&[]); // hiçbir imza sunulmuyor
+    assert!(
+        ctx.client().try_approve_request(&ctx.coords[0], &id).is_err(),
+        "imzasız onay kabul edilmemeli"
+    );
+}
+
+#[test]
+fn payout_blocked_below_threshold() {
+    let ctx = setup();
+    let c = ctx.client();
+    c.deposit(&ctx.donor, &DEPOSIT);
+    let id = c.create_request(&ctx.proof(1), &(10_0000000), &ctx.proof(2));
+
+    assert_eq!(
+        c.try_execute_payout(&id),
+        Err(Ok(Error::InsufficientApprovals)),
+        "0 onayla ödeme olmaz"
+    );
+
+    c.approve_request(&ctx.coords[0], &id);
+    assert_eq!(
+        c.try_execute_payout(&id),
+        Err(Ok(Error::InsufficientApprovals)),
+        "1/3 yetmez"
+    );
+
+    c.approve_request(&ctx.coords[2], &id);
+    c.execute_payout(&id);
+    assert_eq!(ctx.usdc().balance(&ctx.relayer), 10_0000000, "2/3 yeter");
+}
+
+#[test]
+fn completed_request_cannot_be_approved_again() {
+    let ctx = setup();
+    let c = ctx.client();
+    c.deposit(&ctx.donor, &DEPOSIT);
+    let id = c.create_request(&ctx.proof(1), &(10_0000000), &ctx.proof(2));
+    ctx.approve_two(id);
+    c.execute_payout(&id);
+
+    assert_eq!(
+        c.try_approve_request(&ctx.coords[2], &id),
+        Err(Ok(Error::AlreadyCompleted))
+    );
+}
+
+#[test]
+fn approvals_are_scoped_to_their_request() {
+    let ctx = setup();
+    let c = ctx.client();
+    c.deposit(&ctx.donor, &DEPOSIT);
+
+    let first = c.create_request(&ctx.proof(1), &(10_0000000), &ctx.proof(2));
+    let second = c.create_request(&ctx.proof(3), &(10_0000000), &ctx.proof(4));
+
+    ctx.approve_two(first);
+    assert_eq!(c.get_request(&second).approvals_count, 0, "onaylar sızmamalı");
+    assert_eq!(
+        c.try_execute_payout(&second),
+        Err(Ok(Error::InsufficientApprovals))
     );
 }
 
@@ -235,6 +370,7 @@ fn update_relayer_redirects_future_payouts() {
     assert_eq!(c.get_config().relayer, new_relayer);
 
     let id = c.create_request(&ctx.proof(1), &(50_0000000), &ctx.proof(2));
+    ctx.approve_two(id);
     c.execute_payout(&id);
 
     assert_eq!(ctx.usdc().balance(&new_relayer), 50_0000000);

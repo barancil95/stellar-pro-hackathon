@@ -191,12 +191,20 @@ export async function withdraw(token, { amount, quoteId, onChangeCallback }) {
   return request(url.toString(), { headers: authHeader(token) });
 }
 
-/** Fiyatlamayı açık yapan varyant — talepler TRY cinsinden geldiği için bunu kullanıyoruz. */
+/**
+ * Fiyatlamayı açık yapan varyant — talepler TRY cinsinden geldiği için bunu
+ * kullanıyoruz.
+ *
+ * ⚠️ `source_asset` **asset kodu** ("USDC"), SEP-38 formatı DEĞİL. SEP-6
+ * spec'inde exchange varyantlarında zincir üstü bacak kodla, zincir dışı bacak
+ * SEP-38 formatıyla verilir. Plan 5.4 bunu `stellar:USDC:<issuer>` diye
+ * yazmıştı; anchor 400 "unsupported source_asset" döndürdü.
+ */
 export async function withdrawExchange(token, { sellAmount, quoteId, onChangeCallback }) {
   const h = await health();
   const ids = await assetIds();
   const url = new URL(`${h.sep.transfer_server}/withdraw-exchange`);
-  url.searchParams.set('source_asset', ids.usdc);
+  url.searchParams.set('source_asset', 'USDC');
   url.searchParams.set('destination_asset', ids.try);
   url.searchParams.set('amount', String(sellAmount));
   url.searchParams.set('funding_method', 'bank_account');

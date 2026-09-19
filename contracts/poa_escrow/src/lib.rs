@@ -113,6 +113,18 @@ pub struct RequestCreated {
 
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RequestApproved {
+    #[topic]
+    pub request_id: u64,
+    #[topic]
+    pub coordinator: Address,
+    /// Bu onaydan sonraki toplam.
+    pub approvals_count: u32,
+    pub threshold: u32,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PayoutExecuted {
     #[topic]
     pub request_id: u64,
@@ -229,13 +241,58 @@ impl PoaEscrow {
         Ok(id)
     }
 
-    /// Fon **sabit** relayer adresine çıkar.
+    /// Koordinatör onayı. Üçünden ikisi yeterli.
     ///
-    /// M1: onay sayısı kontrolü henüz yok — `approve_request` M2'de gelir.
+    /// Onay **koordinatörün kendi cüzdanıyla** imzalanır. Her onay ayrı bir
+    /// (request, coordinator) anahtarına yazılır — sadece sayaç tutmak aynı
+    /// koordinatörün iki kez onaylayıp eşiği tek başına geçmesine izin verirdi.
+    pub fn approve_request(
+        env: Env,
+        coordinator: Address,
+        request_id: u64,
+    ) -> Result<(), Error> {
+        coordinator.require_auth();
+
+        let cfg = config(&env)?;
+        if !cfg.coordinators.contains(&coordinator) {
+            return Err(Error::NotACoordinator);
+        }
+
+        let mut request = get_request(&env, request_id)?;
+        if request.completed {
+            return Err(Error::AlreadyCompleted);
+        }
+
+        let vote = DataKey::Approval(request_id, coordinator.clone());
+        if env.storage().persistent().get(&vote).unwrap_or(false) {
+            return Err(Error::AlreadyApproved);
+        }
+        env.storage().persistent().set(&vote, &true);
+        env.storage()
+            .persistent()
+            .extend_ttl(&vote, TTL_BUMP_AT, TTL_EXTEND_TO);
+
+        request.approvals_count += 1;
+        put_request(&env, &request);
+
+        RequestApproved {
+            request_id,
+            coordinator,
+            approvals_count: request.approvals_count,
+            threshold: APPROVAL_THRESHOLD,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    /// Fon **sabit** relayer adresine çıkar. 2/3 onay şart.
     pub fn execute_payout(env: Env, request_id: u64) -> Result<(), Error> {
         let mut request = get_request(&env, request_id)?;
         if request.completed {
             return Err(Error::AlreadyCompleted);
+        }
+        if request.approvals_count < APPROVAL_THRESHOLD {
+            return Err(Error::InsufficientApprovals);
         }
         if available_balance(&env)? < request.amount {
             return Err(Error::InsufficientBalance);

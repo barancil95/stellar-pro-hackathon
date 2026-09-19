@@ -283,10 +283,18 @@ Takılırsa `pending_reason`: `treasury_low` kendiliğinden çözülür.
 ### 5.4 Exchange varyantları
 
 Talepler TRY cinsinden → `/sep6/withdraw-exchange` ve `/sep6/deposit-exchange`
-fiyatlamayı açık yapar, `quote_id` bağlanır:
+fiyatlamayı açık yapar, `quote_id` bağlanır.
+
+⚠️ **v5'te yanlış yazılmıştı.** Exchange varyantlarında **zincir üstü bacak
+asset koduyla**, zincir dışı bacak SEP-38 formatıyla verilir. SEP-38 formatı
+yalnızca `/sep38/*` çağrılarında geçerli:
 
 ```
-source_asset=stellar:USDC:<issuer>&destination_asset=iso4217:TRY&amount=…&quote_id=…
+# DOĞRU (M2'de ölçüldü)
+source_asset=USDC&destination_asset=iso4217:TRY&amount=…&quote_id=…
+
+# YANLIŞ → 400 "unsupported source_asset 'stellar:USDC:…'; this anchor ramps USDC"
+source_asset=stellar:USDC:<issuer>&…
 ```
 
 `funding_method=bank_account` kullanın — `type=bank_account` deprecated.
