@@ -5,7 +5,7 @@ import { Buffer } from 'buffer';
 
 import { Check, ArrowUpRight } from 'lucide-react';
 import { fromStroops, explorerTx } from '../lib/soroban.js';
-import { shortHash } from '../lib/evidence.js';
+import { shortHash, isEmptyProof } from '../lib/evidence.js';
 
 /**
  * Talep anında gösterge quote, ödeme anında firm quote alınıyor (plan 5.5).
@@ -39,8 +39,9 @@ export default function AuditTimeline({ request, approvalCount, payout, note }) 
   const steps = [
     {
       label: 'Kanıt',
-      detail: `sha256 ${shortHash(proofHex, 6)}`,
-      done: true,
+      // Kanıt opsiyonel; sıfır hash'i sha256'ymış gibi göstermek yanıltıcı olur.
+      detail: isEmptyProof(proofHex) ? 'eklenmedi' : `sha256 ${shortHash(proofHex, 6)}`,
+      done: !isEmptyProof(proofHex),
     },
     {
       label: 'Talep',

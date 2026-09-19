@@ -16,7 +16,7 @@ import {
   fromStroops,
   explorerTx,
 } from '../lib/soroban.js';
-import { shortHash } from '../lib/evidence.js';
+import { shortHash, isEmptyProof } from '../lib/evidence.js';
 import AuditTimeline from './AuditTimeline.jsx';
 
 const TERMINAL = new Set(['completed', 'error', 'refunded']);
@@ -166,7 +166,10 @@ export default function MultisigPanel({ wallet, refreshKey }) {
                 </span>
               </h3>
               <span className="font-mono text-xs text-muted">
-                #{id} · kanıt {shortHash(Buffer.from(r.proof_hash).toString('hex'), 6)}
+                #{id} ·{' '}
+                {isEmptyProof(Buffer.from(r.proof_hash).toString('hex'))
+                  ? 'kanıt eklenmedi'
+                  : `kanıt ${shortHash(Buffer.from(r.proof_hash).toString('hex'), 6)}`}
               </span>
             </header>
 

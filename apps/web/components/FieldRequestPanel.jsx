@@ -6,7 +6,7 @@ import { Buffer } from 'buffer';
 import { useEffect, useState } from 'react';
 import { FileUp, Loader2, ShieldCheck, ArrowUpRight } from 'lucide-react';
 import { createRequest, explorerTx, readEscrow, fromStroops } from '../lib/soroban.js';
-import { hashEvidence, shortHash, formatBytes } from '../lib/evidence.js';
+import { hashEvidence, shortHash, formatBytes, EMPTY_PROOF_HEX } from '../lib/evidence.js';
 import { indicativePrice, assetIds } from '../lib/anchor.js';
 
 export default function FieldRequestPanel({ wallet, onCreated }) {
@@ -80,7 +80,8 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
         signTransaction: wallet.sign,
         supplierRef: Buffer.from(supplier.supplierRef, 'hex'),
         amount: quote.sell_amount,
-        proofHash: Buffer.from(evidence.hex, 'hex'),
+        // Kanıt opsiyonel; yoksa sıfır hash gider ve denetim izi "kanıt eklenmedi" der.
+        proofHash: Buffer.from(evidence?.hex ?? EMPTY_PROOF_HEX, 'hex'),
       });
 
       // İhtiyaç açıklaması zincire sığmaz; denetim izinde görünsün diye saklanıyor.
@@ -109,7 +110,7 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
   const neededUsdc = quote ? Number(quote.sell_amount) : 0;
   const exceedsEscrow =
     escrowBalance !== null && quote && neededUsdc > Number(escrowBalance);
-  const ready = wallet && evidence && quote && need.trim() && supplierName.trim();
+  const ready = wallet && quote && need.trim() && supplierName.trim();
 
   return (
     <section className="rounded-2xl border border-edge bg-surface p-6">
@@ -164,7 +165,7 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
             />
           </Field>
 
-          <Field label="İhtiyaç kanıtı">
+          <Field label="İhtiyaç kanıtı — opsiyonel">
             <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-edge bg-ink px-3 py-3 text-sm transition hover:border-signal">
               <FileUp size={16} className="text-muted" />
               {evidence ? (
@@ -179,6 +180,12 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
               )}
               <input type="file" onChange={handleFile} className="hidden" />
             </label>
+            {!evidence && (
+              <p className="mt-1.5 text-xs text-muted">
+                Kanıtsız da talep açılabilir — sahada belge çıkaracak durumda olmayan
+                aktör engellenmesin. Denetim izi o talebi &quot;kanıt eklenmedi&quot; diye gösterir.
+              </p>
+            )}
           </Field>
 
           {evidence?.previewUrl && (

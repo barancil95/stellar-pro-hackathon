@@ -28,6 +28,15 @@ export async function hashEvidence(file) {
   };
 }
 
+/**
+ * Kanıt zorunlu değil — sahada fotoğraf çekecek durumda olmayan bir aktör de
+ * talep açabilmeli. Contract `proof_hash`'i 32 bayt olarak istiyor, o yüzden
+ * "kanıt yok" hâli sıfır hash'tir. Ekranlar bunu hash gibi göstermez.
+ */
+export const EMPTY_PROOF_HEX = '0'.repeat(64);
+
+export const isEmptyProof = (hex) => !hex || /^0+$/.test(hex);
+
 export const shortHash = (hex, n = 8) =>
   hex ? `${hex.slice(0, n)}…${hex.slice(-n)}` : '';
 
