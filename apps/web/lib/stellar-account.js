@@ -1,7 +1,23 @@
-/** Horizon üzerinden hesap okumaları (contract dışı kalanlar). */
+/** Horizon üzerinden hesap okumaları ve trustline (contract dışı kalanlar). */
+
+import {
+  Asset,
+  BASE_FEE,
+  Horizon,
+  Networks,
+  Operation,
+  TransactionBuilder,
+} from '@stellar/stellar-sdk';
 
 const HORIZON =
-  process.env.NEXT_PUBLIC_HORIZON_URL || 'https://horizon-testnet.stellar.org';
+  process.env.NEXT_PUBLIC_HORIZON_URL ||
+  process.env.HORIZON_URL ||
+  'https://horizon-testnet.stellar.org';
+
+const PASSPHRASE =
+  process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE ||
+  process.env.NETWORK_PASSPHRASE ||
+  Networks.TESTNET;
 
 /**
  * @returns {Promise<{exists: boolean, trustline: boolean, balance: string}>}
@@ -10,7 +26,7 @@ const HORIZON =
  */
 export async function usdcPosition(publicKey, issuer) {
   const res = await fetch(`${HORIZON}/accounts/${publicKey}`);
-  if (res.status === 404) return { exists: false, trustline: false, balance: '0' };
+  if (res.status === 404) return { exists: false, trustline: false, balance: '0', xlm: '0' };
   if (!res.ok) throw new Error(`Horizon ${res.status}`);
 
   const account = await res.json();
@@ -23,4 +39,31 @@ export async function usdcPosition(publicKey, issuer) {
     balance: line ? line.balance : '0',
     xlm: account.balances.find((b) => b.asset_type === 'native')?.balance ?? '0',
   };
+}
+
+/**
+ * USDC trustline açar. Cüzdan imzalar.
+ *
+ * Trustline başına 0.5 XLM rezerv gerekir; hesapta yoksa Horizon
+ * `tx_insufficient_balance` döner.
+ */
+export async function openUsdcTrustline({ publicKey, signTransaction, issuer }) {
+  const horizon = new Horizon.Server(HORIZON);
+  const account = await horizon.loadAccount(publicKey);
+
+  const tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: PASSPHRASE,
+  })
+    .addOperation(Operation.changeTrust({ asset: new Asset('USDC', issuer) }))
+    .setTimeout(120)
+    .build();
+
+  const { signedTxXdr } = await signTransaction(tx.toXDR(), {
+    networkPassphrase: PASSPHRASE,
+  });
+
+  const signed = TransactionBuilder.fromXDR(signedTxXdr, PASSPHRASE);
+  const res = await horizon.submitTransaction(signed);
+  return res.hash;
 }

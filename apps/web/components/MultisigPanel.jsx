@@ -37,6 +37,9 @@ export default function MultisigPanel({ wallet, refreshKey }) {
           payout: await fetch(`/api/payout?requestId=${r.id}`)
             .then((res) => res.json())
             .catch(() => null),
+          note: await fetch(`/api/requests?requestId=${r.id}`)
+            .then((res) => res.json())
+            .catch(() => null),
         })),
       );
       setRows(withApprovals);
@@ -130,13 +133,13 @@ export default function MultisigPanel({ wallet, refreshKey }) {
           <section key={id} className="rounded-2xl border border-edge bg-surface p-6">
             <header className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
               <h3 className="font-semibold">
-                Talep #{id}
+                {r.note?.need || `Talep #${id}`}
                 <span className="ml-3 font-mono text-sm text-verified">
                   {fromStroops(r.amount)} USDC
                 </span>
               </h3>
               <span className="font-mono text-xs text-muted">
-                kanıt {shortHash(Buffer.from(r.proof_hash).toString('hex'), 6)}
+                #{id} · kanıt {shortHash(Buffer.from(r.proof_hash).toString('hex'), 6)}
               </span>
             </header>
 
@@ -215,7 +218,12 @@ export default function MultisigPanel({ wallet, refreshKey }) {
               )}
             </div>
 
-            <AuditTimeline request={r} approvalCount={count} payout={r.payout} />
+            <AuditTimeline
+              request={r}
+              approvalCount={count}
+              payout={r.payout}
+              note={r.note}
+            />
           </section>
         );
       })}

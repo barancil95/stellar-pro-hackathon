@@ -77,6 +77,17 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
         proofHash: Buffer.from(evidence.hex, 'hex'),
       });
 
+      // İhtiyaç açıklaması zincire sığmaz; denetim izinde görünsün diye saklanıyor.
+      await fetch('/api/requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          requestId: Number(requestId),
+          need: need.trim(),
+          supplierName: supplierName.trim(),
+        }),
+      });
+
       setCreated({ requestId: String(requestId), hash });
       onCreated?.();
     } catch (e) {

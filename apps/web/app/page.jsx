@@ -19,6 +19,7 @@ export default function Home() {
   const [anchor, setAnchor] = useState(null);
   const [tab, setTab] = useState('donor');
   const [refreshKey, setRefreshKey] = useState(0);
+  const [walletError, setWalletError] = useState(null);
 
   // Issuer ve kurlar hardcode edilmez — /health'ten okunur.
   useEffect(() => {
@@ -32,8 +33,20 @@ export default function Home() {
           <Activity size={20} className="text-signal" />
           <span className="font-semibold tracking-tight">Proof-of-Action</span>
         </div>
-        <WalletButton wallet={wallet} onChange={(w) => setWallet(w)} />
+        <WalletButton
+          wallet={wallet}
+          onChange={(w, err) => {
+            setWallet(w);
+            setWalletError(err ?? null);
+          }}
+        />
       </nav>
+
+      {walletError && (
+        <p className="mb-6 rounded-lg border border-signal/30 bg-signal/5 px-3 py-2.5 text-sm text-signal">
+          Cüzdan bağlanamadı: {walletError}
+        </p>
+      )}
 
       <header className="mb-12 max-w-2xl">
         <h1 className="text-4xl font-bold leading-[1.1] tracking-tight sm:text-5xl">

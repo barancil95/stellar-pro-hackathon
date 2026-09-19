@@ -1,11 +1,20 @@
 import { config } from 'dotenv';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
-// Tek kaynak: repo kökündeki .env. Next varsayılan olarak sadece kendi
-// dizinine bakar, o yüzden açıkça yükleniyor.
-config({ path: new URL('../../.env', import.meta.url).pathname });
+const here = dirname(fileURLToPath(import.meta.url));
+const repoRoot = join(here, '..', '..');
+
+// Tek kaynak: repo kökündeki .env. Next kendi dizinine bakar, o yüzden
+// config değerlendirilirken açıkça yükleniyor.
+config({ path: join(repoRoot, '.env') });
 
 /** @type {import('next').NextConfig} */
 export default {
+  // İki lockfile var (kök: script'ler, apps/web: uygulama). Belirtilmezse Next
+  // kökü tahmin ediyor ve serverless bundle'a yanlış dosyaları izliyor.
+  outputFileTracingRoot: repoRoot,
+
   env: {
     // Yalnızca tarayıcıya açılabilecekler. RELAYER_SECRET burada ASLA yer almaz;
     // o sadece sunucu tarafı route'larda process.env'den okunur.

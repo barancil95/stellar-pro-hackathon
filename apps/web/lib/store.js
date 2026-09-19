@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 const DATA_DIR = join(process.cwd(), 'data');
 const FILE = join(DATA_DIR, 'store.json');
 
-const EMPTY = { suppliers: [], payouts: {}, anchorStatus: {}, nextSupplierId: 77100 };
+const EMPTY = { suppliers: [], payouts: {}, notes: {}, anchorStatus: {}, nextSupplierId: 77100 };
 
 function read() {
   try {
@@ -70,6 +70,23 @@ export function listSuppliers() {
     name,
     createdAt,
   }));
+}
+
+/* -------------------------------- talep notu ------------------------------ */
+
+/**
+ * İhtiyaç açıklaması ve tedarikçi adı. Zincirde yalnızca tutar ve iki hash var;
+ * insan tarafı burada — denetim izinde "ne için" sorusunu yanıtlıyor.
+ */
+export function saveRequestNote(requestId, note) {
+  const state = read();
+  state.notes[requestId] = { ...(state.notes[requestId] || {}), ...note };
+  write(state);
+  return state.notes[requestId];
+}
+
+export function getRequestNote(requestId) {
+  return read().notes[requestId] ?? null;
 }
 
 /* ------------------------------ ödeme kayıtları --------------------------- */

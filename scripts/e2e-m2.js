@@ -89,6 +89,13 @@ async function main() {
     amount: AMOUNT_USDC,
     proofHash,
   });
+  // İhtiyaç açıklaması zincire sığmaz; UI'ın yaptığını burada da yapıyoruz.
+  await api('/api/requests', {
+    requestId: Number(requestId),
+    need: 'Jeneratör yakıtı — 3 günlük',
+    supplierName: 'ABC Akaryakıt',
+  });
+
   log('request id :', requestId);
   log('tx :', explorerTx(requestHash));
 

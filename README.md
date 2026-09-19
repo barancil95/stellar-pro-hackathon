@@ -115,6 +115,10 @@ node scripts/anchor-tour.js    # SEP-10 → SEP-12 → SEP-6 deposit → complet
 5. **Fonu serbest bırak** — zincir üstü payout, ardından anchor üzerinden TRY
 6. **Denetim izi** — kanıt → talep → onaylar → fon → anchor → TRY → banka referansı
 
+Cüzdanda USDC trustline'ı yoksa bağış panelinde **"USDC trustline aç"** düğmesi
+çıkar — anchor'dan gelen bir deposit de trustline olmadan `pending_trust`'ta
+beklerdi. Trustline başına 0.5 XLM rezerv gerekir.
+
 > Freighter varsayılan olarak **Mainnet** açılır. Testnet'e alın.
 > Koordinatör cüzdanlarını ayrı ayrı import edin — aynı cüzdan iki kez
 > onaylayamaz, contract reddeder.
@@ -174,7 +178,7 @@ apps/web/
   lib/wallet.js        Stellar Wallets Kit
   lib/evidence.js      kanıt → SHA-256 → zincir
   lib/store.js         IBAN ↔ supplier_ref ↔ memo eşleşmesi
-  app/api/{suppliers,payout,anchor-callback}/route.js
+  app/api/{suppliers,requests,payout,anchor-callback}/route.js
   components/          Bağış · Saha talebi · Çoklu imza · Denetim izi
 scripts/
   anchor-tour.js       M0 keşif turu — gerçek on-ramp

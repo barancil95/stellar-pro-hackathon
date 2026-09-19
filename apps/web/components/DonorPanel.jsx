@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { ArrowUpRight, Loader2, ShieldCheck } from 'lucide-react';
 import { signer } from '../lib/wallet.js';
 import { deposit, readEscrow, fromStroops, explorerTx, CONTRACT_ID, explorerContract } from '../lib/soroban.js';
-import { usdcPosition } from '../lib/stellar-account.js';
+import { usdcPosition, openUsdcTrustline } from '../lib/stellar-account.js';
 import { TestnetHint } from './WalletButton.jsx';
 
 export default function DonorPanel({ wallet, issuer }) {
@@ -12,7 +12,7 @@ export default function DonorPanel({ wallet, issuer }) {
   const [position, setPosition] = useState(null);
   const [amount, setAmount] = useState('5');
   const [busy, setBusy] = useState(false);
-  const [lastTx, setLastTx] = useState(null);
+  const [lastTx, setLastTx] = useState(null); // { hash, label }
   const [error, setError] = useState(null);
 
   const refresh = useCallback(async () => {
@@ -28,6 +28,24 @@ export default function DonorPanel({ wallet, issuer }) {
     refresh();
   }, [refresh]);
 
+  async function handleTrustline() {
+    setBusy(true);
+    setError(null);
+    try {
+      const hash = await openUsdcTrustline({
+        publicKey: wallet.address,
+        signTransaction: signer(wallet.address),
+        issuer,
+      });
+      setLastTx({ hash, label: 'USDC trustline açıldı' });
+      await refresh();
+    } catch (e) {
+      setError(trustlineHint(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleDonate() {
     setBusy(true);
     setError(null);
@@ -37,7 +55,7 @@ export default function DonorPanel({ wallet, issuer }) {
         signTransaction: signer(wallet.address),
         amount,
       });
-      setLastTx(hash);
+      setLastTx({ hash, label: 'Bağış zincire yazıldı' });
       await refresh();
     } catch (e) {
       setError(e.message);
@@ -109,9 +127,21 @@ export default function DonorPanel({ wallet, issuer }) {
           </div>
 
           {noTrustline && (
-            <p className="mt-3 text-xs text-signal">
-              Bu cüzdanda USDC trustline'ı yok. Önce trustline açın.
-            </p>
+            <div className="mt-3 rounded-lg border border-signal/30 bg-signal/5 p-3">
+              <p className="text-xs text-signal">
+                Bu cüzdan USDC tutamıyor — trustline yok. Anchor'dan gelen bir
+                deposit de bu yüzden <span className="font-mono">pending_trust</span>'ta
+                beklerdi.
+              </p>
+              <button
+                onClick={handleTrustline}
+                disabled={busy}
+                className="mt-2.5 inline-flex items-center gap-2 rounded-lg border border-signal/50 px-3 py-1.5 text-xs font-semibold text-signal transition hover:bg-signal/10 disabled:opacity-40"
+              >
+                {busy && <Loader2 size={12} className="animate-spin" />}
+                USDC trustline aç
+              </button>
+            </div>
           )}
           {insufficient && !noTrustline && (
             <p className="mt-3 text-xs text-signal">Cüzdan bakiyesi yetersiz.</p>
@@ -121,14 +151,14 @@ export default function DonorPanel({ wallet, issuer }) {
 
       {lastTx && (
         <a
-          href={explorerTx(lastTx)}
+          href={explorerTx(lastTx.hash)}
           target="_blank"
           rel="noreferrer"
           className="mt-4 flex items-center gap-2 rounded-lg border border-verified/30 bg-verified/5 px-3 py-2.5 text-sm text-verified"
         >
           <ShieldCheck size={15} />
-          Bağış zincire yazıldı
-          <span className="ml-auto font-mono text-xs">{lastTx.slice(0, 10)}…</span>
+          {lastTx.label}
+          <span className="ml-auto font-mono text-xs">{lastTx.hash.slice(0, 10)}…</span>
           <ArrowUpRight size={13} />
         </a>
       )}
@@ -140,6 +170,15 @@ export default function DonorPanel({ wallet, issuer }) {
       )}
     </section>
   );
+}
+
+/** Trustline için 0.5 XLM rezerv gerekir — Horizon'un hatası okunaksız. */
+function trustlineHint(e) {
+  const code = e?.response?.data?.extras?.result_codes?.transaction;
+  if (code === 'tx_insufficient_balance') {
+    return 'XLM yetersiz — trustline başına 0.5 XLM rezerv gerekiyor.';
+  }
+  return e.message;
 }
 
 function Stat({ label, value, unit, accent }) {

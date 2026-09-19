@@ -11,7 +11,7 @@ import { shortHash } from '../lib/evidence.js';
  * "Para nereye gitti?" — zincirdeki ve anchor'daki gerçek duruma bakar,
  * uydurma adım yok. Tamamlanmamış adım soluk gösterilir.
  */
-export default function AuditTimeline({ request, approvalCount, payout }) {
+export default function AuditTimeline({ request, approvalCount, payout, note }) {
   const proofHex = Buffer.from(request.proof_hash).toString('hex');
   const supplierHex = Buffer.from(request.supplier_ref).toString('hex');
 
@@ -23,7 +23,9 @@ export default function AuditTimeline({ request, approvalCount, payout }) {
     },
     {
       label: 'Talep',
-      detail: `#${request.id} · ${fromStroops(request.amount)} USDC · tedarikçi ${shortHash(supplierHex, 4)}`,
+      detail: `#${request.id} · ${fromStroops(request.amount)} USDC · tedarikçi ${
+        note?.supplierName || payout?.supplierName || shortHash(supplierHex, 4)
+      }`,
       done: true,
     },
     {
