@@ -21,13 +21,13 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Wallets Kit modal'ı kendi shadow DOM'unda; üstte kalsın. */
+/* The Wallets Kit modal lives in its own shadow DOM; keep it on top. */
 stellar-wallets-modal {
   position: relative;
   z-index: 60;
 }
 
-/* Form alanları — tekrar eden Tailwind zincirini tek yerde tut. */
+/* Form fields — keep the repeated Tailwind chain in one place. */
 .input {
   width: 100%;
   border-radius: 0.5rem;

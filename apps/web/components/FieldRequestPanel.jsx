@@ -1,6 +1,6 @@
 'use client';
 
-// Tarayıcıda Buffer global değil — açıkça import ediliyor.
+// Buffer is not a global in the browser — imported explicitly.
 import { Buffer } from 'buffer';
 
 import { useEffect, useState } from 'react';
@@ -10,9 +10,9 @@ import { hashEvidence, shortHash, formatBytes, EMPTY_PROOF_HEX } from '../lib/ev
 import { indicativePrice, assetIds } from '../lib/anchor.js';
 
 export default function FieldRequestPanel({ wallet, onCreated }) {
-  const [need, setNeed] = useState('Jeneratör yakıtı — 3 günlük');
+  const [need, setNeed] = useState('Generator fuel — 3 days');
   const [tryAmount, setTryAmount] = useState('1500');
-  const [supplierName, setSupplierName] = useState('ABC Akaryakıt');
+  const [supplierName, setSupplierName] = useState('ABC Fuel Co.');
   const [iban, setIban] = useState('TR320010009999901234567890');
   const [evidence, setEvidence] = useState(null);
   const [quote, setQuote] = useState(null);
@@ -21,13 +21,14 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
   const [error, setError] = useState(null);
   const [escrowBalance, setEscrowBalance] = useState(null);
 
-  // Talep escrow'dan büyükse ödeme anında contract reddeder (Error #9).
-  // Kullanıcıya o ana kadar beklemek yerine burada söylüyoruz.
+  // If the request exceeds the escrow, the contract rejects it at payout time
+  // (Error #9). We tell the user here instead of making them wait until then.
   useEffect(() => {
     readEscrow().then((e) => setEscrowBalance(fromStroops(e.balance))).catch(() => {});
   }, []);
 
-  // Gösterge quote — talep anında. Firm quote ödeme anında alınır (plan 5.5).
+  // An indicative quote at request time. The firm quote is fetched at payout time
+  // (plan 5.5).
   useEffect(() => {
     let alive = true;
     const amount = Number(tryAmount);
@@ -80,11 +81,12 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
         signTransaction: wallet.sign,
         supplierRef: Buffer.from(supplier.supplierRef, 'hex'),
         amount: quote.sell_amount,
-        // Kanıt opsiyonel; yoksa sıfır hash gider ve denetim izi "kanıt eklenmedi" der.
+        // Proof is optional; without it the zero hash goes on-chain and the audit
+        // trail reads "no proof attached".
         proofHash: Buffer.from(evidence?.hex ?? EMPTY_PROOF_HEX, 'hex'),
       });
 
-      // İhtiyaç açıklaması zincire sığmaz; denetim izinde görünsün diye saklanıyor.
+      // The need description does not fit on-chain; stored so it shows in the audit trail.
       await fetch('/api/requests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -92,8 +94,8 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
           requestId: Number(requestId),
           need: need.trim(),
           supplierName: supplierName.trim(),
-          // Zincire USDC yazıldı; kullanıcının gördüğü TRY bu. Ödeme anında
-          // kur yeniden fiyatlanacağı için ikisi denetim izinde karşılaştırılır.
+          // USDC went on-chain; this is the TRY the user saw. Since the rate is
+          // repriced at payout time, the two are compared in the audit trail.
           requestedTry: tryAmount,
         }),
       });
@@ -114,15 +116,15 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
 
   return (
     <section className="rounded-2xl border border-edge bg-surface p-6">
-      <h2 className="mb-5 text-lg font-semibold">Saha talebi aç</h2>
+      <h2 className="mb-5 text-lg font-semibold">Open a field request</h2>
 
       {!wallet ? (
         <p className="text-sm text-muted">
-          Talep açmak için cüzdanınızı bağlayın.
+          Connect your wallet to open a request.
         </p>
       ) : (
         <div className="space-y-4">
-          <Field label="İhtiyaç">
+          <Field label="Need">
             <input
               value={need}
               onChange={(e) => setNeed(e.target.value)}
@@ -131,7 +133,7 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
           </Field>
 
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Tutar (TRY)">
+            <Field label="Amount (TRY)">
               <input
                 type="number"
                 value={tryAmount}
@@ -139,7 +141,7 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
                 className="input font-mono"
               />
             </Field>
-            <Field label="Escrow'dan çıkacak">
+            <Field label="Leaving the escrow">
               <div className="input flex items-center justify-between font-mono">
                 <span className={exceedsEscrow ? 'text-signal' : 'text-verified'}>
                   {quote ? neededUsdc.toFixed(4) : '—'}
@@ -149,7 +151,7 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
             </Field>
           </div>
 
-          <Field label="Tedarikçi">
+          <Field label="Supplier">
             <input
               value={supplierName}
               onChange={(e) => setSupplierName(e.target.value)}
@@ -157,7 +159,7 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
             />
           </Field>
 
-          <Field label="Tedarikçi IBAN'ı — zincire yazılmaz, hash'i gider">
+          <Field label="Supplier IBAN — never written on-chain, only its hash">
             <input
               value={iban}
               onChange={(e) => setIban(e.target.value)}
@@ -165,7 +167,7 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
             />
           </Field>
 
-          <Field label="İhtiyaç kanıtı — opsiyonel">
+          <Field label="Proof of need — optional">
             <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-edge bg-ink px-3 py-3 text-sm transition hover:border-signal">
               <FileUp size={16} className="text-muted" />
               {evidence ? (
@@ -176,14 +178,15 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
                   </span>
                 </span>
               ) : (
-                <span className="text-muted">Fotoğraf, fatura veya belge seçin</span>
+                <span className="text-muted">Pick a photo, invoice or document</span>
               )}
               <input type="file" onChange={handleFile} className="hidden" />
             </label>
             {!evidence && (
               <p className="mt-1.5 text-xs text-muted">
-                Kanıtsız da talep açılabilir — sahada belge çıkaracak durumda olmayan
-                aktör engellenmesin. Denetim izi o talebi &quot;kanıt eklenmedi&quot; diye gösterir.
+                A request can be opened without proof — an actor who cannot produce a
+                document in the field should not be blocked. The audit trail shows such
+                a request as &quot;no proof attached&quot;.
               </p>
             )}
           </Field>
@@ -192,15 +195,15 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={evidence.previewUrl}
-              alt="kanıt önizleme"
+              alt="proof preview"
               className="max-h-40 w-full rounded-lg border border-edge object-cover"
             />
           )}
 
           {escrowBalance !== null && (
             <p className={`text-xs ${exceedsEscrow ? 'text-signal' : 'text-muted'}`}>
-              Escrow bakiyesi: <span className="font-mono">{escrowBalance} USDC</span>
-              {exceedsEscrow && ' — talep bundan büyük, ödeme adımında reddedilir. Önce bağış yapın.'}
+              Escrow balance: <span className="font-mono">{escrowBalance} USDC</span>
+              {exceedsEscrow && ' — the request exceeds it and will be rejected at the payout step. Donate first.'}
             </p>
           )}
 
@@ -210,7 +213,7 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
             className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-signal px-5 py-2.5 text-sm font-semibold text-ink transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {busy && <Loader2 size={15} className="animate-spin" />}
-            {busy ? 'İmzalanıyor…' : 'Talebi zincire yaz'}
+            {busy ? 'Signing…' : 'Write the request on-chain'}
           </button>
         </div>
       )}
@@ -223,7 +226,7 @@ export default function FieldRequestPanel({ wallet, onCreated }) {
           className="mt-4 flex items-center gap-2 rounded-lg border border-verified/30 bg-verified/5 px-3 py-2.5 text-sm text-verified"
         >
           <ShieldCheck size={15} />
-          Talep #{created.requestId} açıldı — onay bekliyor
+          Request #{created.requestId} opened — awaiting approval
           <ArrowUpRight size={13} className="ml-auto" />
         </a>
       )}

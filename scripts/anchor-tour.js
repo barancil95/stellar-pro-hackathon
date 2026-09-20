@@ -1,17 +1,18 @@
 /**
- * M0 — Anchor keşif turu.
+ * M0 — the anchor discovery tour.
  *
- * 1. /health oku
+ * 1. read /health
  * 2. SEP-10 auth (relayer)
- * 3. SEP-12 müşteri kaydı
- * 4. SEP-38 gösterge fiyat
+ * 3. SEP-12 customer registration
+ * 4. SEP-38 indicative price
  * 5. SEP-6 deposit → simulate-bank-transfer → completed
- *    → relayer'da trustline var, düz payment gelmeli
- * 6. Trustline'sız hesaba deposit → `pending_trust` bilerek tetiklenir,
- *    trustline açılınca anchor kendiliğinden öder (claimable balance DEĞİL)
+ *    → the relayer has a trustline, so a plain payment is expected
+ * 6. A deposit to an account with no trustline → `pending_trust` is triggered on
+ *    purpose; once the trustline is opened the anchor pays by itself (NOT a
+ *    claimable balance)
  *
- * Amaç hem anchor akışını gözle doğrulamak hem de M1/M2 testleri için
- * relayer'a gerçek testnet USDC almak (Circle faucet'e gerek yok).
+ * The point is both to verify the anchor flow by eye and to get real testnet USDC
+ * into the relayer for the M1/M2 tests (no Circle faucet needed).
  */
 
 import 'dotenv/config';
@@ -27,7 +28,7 @@ async function usdcBalance(publicKey, issuer) {
   try {
     const acc = await horizon.loadAccount(publicKey);
     const line = acc.balances.find((b) => b.asset_code === 'USDC' && b.asset_issuer === issuer);
-    return line ? line.balance : null; // null = trustline yok
+    return line ? line.balance : null; // null = no trustline
   } catch {
     return null;
   }
@@ -39,9 +40,9 @@ async function main() {
   log('issuer          :', h.asset.issuer);
   log('treasury        :', h.treasury.address, `(${h.treasury.usdc_balance} USDC)`);
   log('low_balance     :', h.treasury.low_balance);
-  log('kur             :', `mid ${h.rates.mid_rate} · buy ${h.rates.buy_rate} · sell ${h.rates.sell_rate}`);
-  log('spread          :', `${h.rates.spread_bps} bps · kaynak: ${h.rates.source}`);
-  log('limitler        :', JSON.stringify(h.limits), '← null = uygulanmıyor');
+  log('rates           :', `mid ${h.rates.mid_rate} · buy ${h.rates.buy_rate} · sell ${h.rates.sell_rate}`);
+  log('spread          :', `${h.rates.spread_bps} bps · source: ${h.rates.source}`);
+  log('limits          :', JSON.stringify(h.limits), '← null = not enforced');
 
   const info = await anchor.sep6Info();
   log('features        :', JSON.stringify(info.features));
@@ -55,13 +56,13 @@ async function main() {
   log('sub             :', claims.sub);
   log('exp             :', new Date(claims.exp * 1000).toISOString());
 
-  step(3, 'SEP-12 müşteri kaydı');
-  log('öncesi          :', (await session.call((t) => anchor.getCustomer(t))).status);
+  step(3, 'SEP-12 customer registration');
+  log('before          :', (await session.call((t) => anchor.getCustomer(t))).status);
   await session.call((t) => anchor.putCustomer(t, {}));
   const after = await session.call((t) => anchor.getCustomer(t));
-  log('sonrası         :', after.status);
+  log('after           :', after.status);
 
-  step(4, 'SEP-38 gösterge fiyat — 1500 TRY → USDC');
+  step(4, 'SEP-38 indicative price — 1500 TRY → USDC');
   const ids = await anchor.assetIds();
   const price = await anchor.indicativePrice({
     sellAsset: ids.try,
@@ -72,19 +73,19 @@ async function main() {
   log('buy_amount      :', price.buy_amount, 'USDC');
   log('fee             :', price.fee?.total, price.fee?.asset);
 
-  step(5, 'SEP-6 deposit — relayer (trustline VAR → payment beklenir)');
+  step(5, 'SEP-6 deposit — relayer (trustline PRESENT → a payment is expected)');
   const before = await usdcBalance(relayer.publicKey(), h.asset.issuer);
-  log('önce            :', before, 'USDC');
+  log('before          :', before, 'USDC');
 
   const dep = await session.call((t) =>
     anchor.deposit(t, { account: relayer.publicKey(), amount: '1500.00' }),
   );
   log('tx id           :', dep.id);
-  log('banka           :', dep.instructions?.bank_name?.value);
+  log('bank            :', dep.instructions?.bank_name?.value);
   log('IBAN            :', dep.instructions?.bank_account_number?.value);
-  log('açıklama/referans:', dep.instructions?.external_transfer_memo?.value);
+  log('reference       :', dep.instructions?.external_transfer_memo?.value);
 
-  log('\n→ TRY transferi simüle ediliyor…');
+  log('\n→ simulating the TRY transfer…');
   await anchor.simulateBankTransfer(dep.id, '1500.00');
 
   const done = await anchor.pollTransaction(session, dep.id, {
@@ -94,16 +95,16 @@ async function main() {
   log('amount_out      :', done.amount_out, done.amount_out_asset);
   log('amount_fee      :', done.amount_fee);
   log('stellar tx      :', done.stellar_transaction_id);
-  log('claimable       :', done.claimable_balance_id || '— (düz payment, beklendiği gibi)');
-  log('sonra           :', await usdcBalance(relayer.publicKey(), h.asset.issuer), 'USDC');
+  log('claimable       :', done.claimable_balance_id || '— (plain payment, as expected)');
+  log('after           :', await usdcBalance(relayer.publicKey(), h.asset.issuer), 'USDC');
 
-  step(6, 'SEP-6 deposit — trustline YOK → `pending_trust` beklenir');
+  step(6, 'SEP-6 deposit — NO trustline → `pending_trust` expected');
   const noTrust = Keypair.fromSecret(process.env.COORD_C_SECRET);
-  log('hesap           :', noTrust.publicKey());
+  log('account         :', noTrust.publicKey());
   const trustline = await usdcBalance(noTrust.publicKey(), h.asset.issuer);
   if (trustline !== null) {
-    log('⏭  bu hesapta trustline zaten açık, adım atlanıyor');
-    log('   (temiz tekrar için yeni bir hesap üret: stellar keys generate … --fund)');
+    log('⏭  this account already has a trustline, skipping the step');
+    log('   (for a clean rerun, generate a new account: stellar keys generate … --fund)');
   } else {
     const s2 = anchor.makeSession(noTrust);
     await s2.call((t) => anchor.putCustomer(t, {}));
@@ -112,7 +113,7 @@ async function main() {
     );
     await anchor.simulateBankTransfer(dep2.id, '100.00');
 
-    // pending_trust terminal değil — poll timeout'a düşer, beklenen bu.
+    // pending_trust is not terminal — the poll times out, which is expected.
     const held = await anchor
       .pollTransaction(s2, dep2.id, {
         timeoutMs: 20000,
@@ -120,18 +121,18 @@ async function main() {
       })
       .catch((e) => e.transaction);
 
-    log('durum           :', held.status, held.status === 'pending_trust' ? '✓ beklendiği gibi' : '← BEKLENMEDİK');
-    log('anchor mesajı   :', held.message);
-    log('claimable id    :', held.claimable_balance_id || '— (claimable balance YOK)');
-    log('\n→ Kurtarma: changeTrust. Anchor kalanı kendi yapar, claim gerekmez.');
+    log('status          :', held.status, held.status === 'pending_trust' ? '✓ as expected' : '← UNEXPECTED');
+    log('anchor message  :', held.message);
+    log('claimable id    :', held.claimable_balance_id || '— (NO claimable balance)');
+    log('\n→ Recovery: changeTrust. The anchor does the rest by itself, no claim needed.');
   }
 
-  log('\n✅ M0 anchor turu tamam.');
+  log('\n✅ M0 anchor tour complete.');
 }
 
 main().catch((e) => {
   console.error('\n❌', e.message);
   if (e.body) console.error(JSON.stringify(e.body, null, 2));
-  if (e.transaction) console.error('son transaction:', JSON.stringify(e.transaction, null, 2));
+  if (e.transaction) console.error('last transaction:', JSON.stringify(e.transaction, null, 2));
   process.exit(1);
 });

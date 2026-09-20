@@ -1,15 +1,14 @@
 /**
- * poa_escrow contract istemcisi.
+ * poa_escrow contract client.
  *
- * Spec zincirden okunur (`contract.Client.from`), böylece binding üretme adımı
- * yok — contract değişince frontend kendiliğinden güncel kalıyor.
+ * The spec is read from the chain (`contract.Client.from`), so there is no binding
+ * generation step — when the contract changes the frontend stays current on its own.
  */
 
 import { contract, rpc } from '@stellar/stellar-sdk';
 
-// Tarayıcıda yalnızca NEXT_PUBLIC_* gömülü olur; Node script'lerinde ise
-// .env'deki çıplak adlar okunur. İkisi de desteklenir ki aynı modül her
-// iki tarafta da çalışsın.
+// Only NEXT_PUBLIC_* is inlined in the browser; Node scripts read the bare names
+// from .env. Both are supported so the same module runs on either side.
 export const RPC_URL =
   process.env.NEXT_PUBLIC_SOROBAN_RPC_URL ||
   process.env.SOROBAN_RPC_URL ||
@@ -23,7 +22,7 @@ export const CONTRACT_ID =
 export const USDC_SAC_ID =
   process.env.NEXT_PUBLIC_USDC_SAC_ID || process.env.USDC_SAC_ID;
 
-/** USDC 7 ondalıklı. Float kullanmıyoruz — kuruş kaybı olmasın. */
+/** USDC has 7 decimals. We never use floats — no lost cents. */
 export const USDC_DECIMALS = 7;
 const SCALE = 10n ** BigInt(USDC_DECIMALS);
 
@@ -46,11 +45,11 @@ export const rpcServer = () => new rpc.Server(RPC_URL);
 const clientCache = new Map();
 
 /**
- * @param options.publicKey    imzalayacak adres (okuma için boş olabilir)
- * @param options.signTransaction  Wallets Kit'ten gelen imzalayıcı
+ * @param options.publicKey    the signing address (may be empty for reads)
+ * @param options.signTransaction  the signer coming from Wallets Kit
  */
 export async function escrowClient({ publicKey, signTransaction } = {}) {
-  if (!CONTRACT_ID) throw new Error('POA_CONTRACT_ID tanımlı değil — .env kontrol edin');
+  if (!CONTRACT_ID) throw new Error('POA_CONTRACT_ID is not set — check .env');
 
   const key = publicKey || '__readonly__';
   if (!clientCache.has(key)) {
@@ -69,12 +68,12 @@ export async function escrowClient({ publicKey, signTransaction } = {}) {
   return clientCache.get(key);
 }
 
-/** Cüzdan değişince önbelleği at — yoksa eski adres adına imza istenir. */
+/** Drop the cache when the wallet changes — otherwise we ask the old address to sign. */
 export function resetClientCache() {
   clientCache.clear();
 }
 
-/* ------------------------------- okumalar -------------------------------- */
+/* ---------------------------------- reads --------------------------------- */
 
 export async function readEscrow() {
   const client = await escrowClient();
@@ -88,8 +87,8 @@ export async function readEscrow() {
     balance: unwrap(balance),
     campaign: unwrap(campaign),
     requestCount: count,
-    // Option<Address> → adres veya undefined. Doluysa fon escrow'da değil,
-    // DeFindex vault'unda duruyor ve `balance` payın karşılığı.
+    // Option<Address> → an address or undefined. When set, the funds are not in the
+    // escrow but in the DeFindex vault, and `balance` is the value of the shares.
     vault: unwrap(config).vault ?? null,
   };
 }
@@ -100,7 +99,7 @@ export async function readRequest(id) {
   return unwrap(tx.result);
 }
 
-/** Tüm talepler, en yeni önce. Hackathon ölçeğinde sayı küçük. */
+/** All requests, newest first. At hackathon scale the count is small. */
 export async function readAllRequests() {
   const client = await escrowClient();
   const count = Number((await client.request_count()).result);
@@ -110,7 +109,7 @@ export async function readAllRequests() {
   );
 }
 
-/** Hangi koordinatör onayladı — 2/3 barını beslemek için. */
+/** Which coordinator approved — feeds the 2/3 bar. */
 export async function readApprovals(requestId, coordinators) {
   const client = await escrowClient();
   return Promise.all(
@@ -129,25 +128,26 @@ export async function readConfig() {
 }
 
 /**
- * İşlem hash'i. `getTransactionResponse` bir property (fonksiyon değil);
- * işlem henüz onaylanmadıysa gönderim cevabındaki hash'e düşülür.
+ * The transaction hash. `getTransactionResponse` is a property (not a function);
+ * if the transaction is not confirmed yet we fall back to the hash in the send
+ * response.
  */
 function txHashOf(sent) {
   return sent.getTransactionResponse?.txHash ?? sent.sendTransactionResponse?.hash;
 }
 
-/** Contract Result<T, Error> dönüyor; SDK bunu Ok/Err sarmalıyla veriyor. */
+/** The contract returns Result<T, Error>; the SDK hands it over in an Ok/Err wrapper. */
 function unwrap(result) {
   if (result && typeof result === 'object' && 'isOk' in result) {
-    if (!result.isOk()) throw new Error(`Contract hatası: ${result.unwrapErr().message}`);
+    if (!result.isOk()) throw new Error(`Contract error: ${result.unwrapErr().message}`);
     return result.unwrap();
   }
   return result;
 }
 
-/* -------------------------------- yazmalar ------------------------------- */
+/* --------------------------------- writes --------------------------------- */
 
-/** Bağışçı escrow'a USDC yatırır. Cüzdan imzalar. */
+/** A donor deposits USDC into the escrow. The wallet signs. */
 export async function deposit({ publicKey, signTransaction, amount }) {
   const client = await escrowClient({ publicKey, signTransaction });
   const tx = await client.deposit({ from: publicKey, amount: toStroops(amount) });
@@ -156,7 +156,7 @@ export async function deposit({ publicKey, signTransaction, amount }) {
   return txHashOf(sent);
 }
 
-/** Saha aktörü talep açar. */
+/** A field actor opens a request. */
 export async function createRequest({ publicKey, signTransaction, supplierRef, amount, proofHash }) {
   const client = await escrowClient({ publicKey, signTransaction });
   const tx = await client.create_request({
@@ -171,7 +171,7 @@ export async function createRequest({ publicKey, signTransaction, supplierRef, a
   };
 }
 
-/** Koordinatör onayı — kendi cüzdanıyla imzalar. */
+/** A coordinator approval — signed with their own wallet. */
 export async function approveRequest({ publicKey, signTransaction, requestId }) {
   const client = await escrowClient({ publicKey, signTransaction });
   const tx = await client.approve_request({
@@ -183,7 +183,8 @@ export async function approveRequest({ publicKey, signTransaction, requestId }) 
   return txHashOf(sent);
 }
 
-/** 2/3 onaydan sonra fonu relayer'a çıkarır. Hedef contract'ta sabit. */
+/** Releases the funds to the relayer after 2/3 approvals. The destination is fixed
+ * in the contract. */
 export async function executePayout({ publicKey, signTransaction, requestId }) {
   const client = await escrowClient({ publicKey, signTransaction });
   const tx = await client.execute_payout({ request_id: BigInt(requestId) });

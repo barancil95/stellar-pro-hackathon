@@ -1,20 +1,20 @@
 #![no_std]
 //! Proof-of-Action escrow.
 //!
-//! Bağışlar USDC olarak burada durur. Saha aktörü ihtiyaç kanıtıyla talep açar,
-//! koordinatörlerden 2/3 onay gelince fon **sabit** relayer adresine çıkar.
-//! Relayer fiat rail'i (SEP-6 off-ramp) sürer; contract HTTP konuşamadığı için
-//! o adım zincir dışındadır.
+//! Donations sit here as USDC. A field actor opens a request with proof of need,
+//! and once 2 of 3 coordinators approve, the funds leave to the **fixed** relayer
+//! address. The relayer drives the fiat rail (SEP-6 off-ramp); that step is
+//! off-chain because a contract cannot speak HTTP.
 //!
-//! Vault (DeFindex) **opsiyonel ve açık**. Plan 10.1.a hazır
-//! `usdc_paltalabs_vault`'un asset'inin anchor USDC SAC'ı olmadığını doğru
-//! tespit etmişti; atlanan nokta factory'den **kendi vault'umuzu** kurabildiğimiz.
-//! `create_defindex_vault` anchor'ın SAC'ıyla simüle edildi ve geçti.
+//! The (DeFindex) vault is **optional and enabled**. Plan 10.1.a correctly found
+//! that the ready-made `usdc_paltalabs_vault` does not hold the anchor's USDC SAC;
+//! what it missed is that the factory lets us create **our own vault**.
+//! `create_defindex_vault` was simulated with the anchor's SAC and passed.
 //!
-//! `vault: None` → fon escrow'da durur (eski davranış, aynen korunur).
-//! `vault: Some(v)` → fon DeFindex vault'unda durur, escrow pay (share) tutar.
-//! Testnet'te o SAC için strateji olmadığı için getiri **sıfırdır**; kazanç
-//! mimari. Mainnet'te aynı kod Circle USDC + Blend stratejisiyle getiri üretir.
+//! `vault: None` → funds stay in the escrow (the old behaviour, kept as is).
+//! `vault: Some(v)` → funds sit in a DeFindex vault and the escrow holds shares.
+//! On testnet there is no strategy for that SAC, so yield is **zero**; what we gain
+//! is architecture. On mainnet the same code yields with Circle USDC + Blend.
 
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
@@ -22,10 +22,10 @@ use soroban_sdk::{
     BytesN, Env, IntoVal, Symbol, Val, Vec,
 };
 
-/// 2/3 çoklu imza. Konfigüre edilebilir threshold kapsam dışı (plan 4.3).
+/// 2-of-3 multisig. A configurable threshold is out of scope (plan 4.3).
 const APPROVAL_THRESHOLD: u32 = 2;
 
-// ~5 sn/ledger. Persistent entry'ler uzatılmazsa arşivlenir (plan 4.3 uyarısı).
+// ~5 s/ledger. Persistent entries are archived unless extended (plan 4.3 warning).
 const LEDGERS_PER_DAY: u32 = 17_280;
 const TTL_EXTEND_TO: u32 = LEDGERS_PER_DAY * 30;
 const TTL_BUMP_AT: u32 = LEDGERS_PER_DAY * 20;
@@ -43,9 +43,9 @@ pub enum Error {
     AlreadyApproved = 7,
     InsufficientApprovals = 8,
     InsufficientBalance = 9,
-    /// Vault'ta pay yok — share/asset oranı hesaplanamaz.
+    /// No shares in the vault — the share/asset ratio cannot be computed.
     VaultEmpty = 10,
-    /// Pay hesabı i128'i taşırdı.
+    /// The share computation overflowed i128.
     ArithmeticOverflow = 11,
 }
 
@@ -56,8 +56,8 @@ pub enum DataKey {
     Campaign,
     RequestCount,
     Request(u64),
-    /// (request_id, coordinator) → bool. Mükerrer onayı engeller;
-    /// sadece `approvals_count` tutmak yetersizdir (plan 4.2).
+    /// (request_id, coordinator) → bool. Prevents double approval; keeping only
+    /// `approvals_count` would not be enough (plan 4.2).
     Approval(u64, Address),
 }
 
@@ -66,8 +66,9 @@ pub enum DataKey {
 pub struct Config {
     pub admin: Address,
     pub usdc: Address,
-    /// Payout'un tek gidebileceği adres. `execute_payout` bunu parametre
-    /// olarak ALMAZ — alsaydı 2/3 onay sonrası çağıran fonu yönlendirebilirdi.
+    /// The only address a payout can go to. `execute_payout` does NOT take this
+    /// as a parameter — if it did, a caller could redirect funds after the 2/3
+    /// approvals.
     pub relayer: Address,
     pub coordinators: Vec<Address>,
     pub vault: Option<Address>,
@@ -76,11 +77,11 @@ pub struct Config {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Campaign {
-    /// Yatırılan USDC toplamı.
+    /// Total USDC deposited.
     pub principal: i128,
-    /// Vault share. Vault kapalıyken her zaman 0.
+    /// Vault shares. Always 0 while the vault is off.
     pub shares: i128,
-    /// Ödenen USDC toplamı.
+    /// Total USDC disbursed.
     pub disbursed: i128,
 }
 
@@ -88,18 +89,18 @@ pub struct Campaign {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DisbursementRequest {
     pub id: u64,
-    /// hash(iban + salt). Düz IBAN ledger'a YAZILMAZ.
+    /// hash(iban + salt). A plain IBAN is NEVER written to the ledger.
     pub supplier_ref: BytesN<32>,
-    /// USDC, SAC birimi (7 ondalık).
+    /// USDC in SAC units (7 decimals).
     pub amount: i128,
-    /// IPFS CID veya mock SHA-256.
+    /// IPFS CID or mock SHA-256.
     pub proof_hash: BytesN<32>,
     pub approvals_count: u32,
     pub completed: bool,
 }
 
-/* ---------------------------------- event'ler ---------------------------- */
-// Audit timeline (M3) bunları okur — her adımın zincirdeki karşılığı.
+/* ----------------------------------- events ------------------------------ */
+// The audit timeline (M3) reads these — each step's on-chain counterpart.
 
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -126,7 +127,7 @@ pub struct RequestApproved {
     pub request_id: u64,
     #[topic]
     pub coordinator: Address,
-    /// Bu onaydan sonraki toplam.
+    /// The total after this approval.
     pub approvals_count: u32,
     pub threshold: u32,
 }
@@ -161,8 +162,8 @@ impl PoaEscrow {
         coord_a: Address,
         coord_b: Address,
         coord_c: Address,
-        // Baştan alınır. Sonradan parametre eklemek deploy'u ve tüm
-        // çağrıları bozardı (plan 4.1 kural 2).
+        // Taken from the start. Adding a parameter later would break the deploy
+        // and every call (plan 4.1 rule 2).
         vault: Option<Address>,
     ) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Config) {
@@ -187,7 +188,7 @@ impl PoaEscrow {
         Ok(())
     }
 
-    /// Bağışçı USDC yatırır. `from` imzalar — contract kimsenin fonunu çekemez.
+    /// A donor deposits USDC. `from` signs — the contract cannot pull anyone's funds.
     pub fn deposit(env: Env, from: Address, amount: i128) -> Result<(), Error> {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -203,8 +204,9 @@ impl PoaEscrow {
 
         let mut campaign = campaign(&env);
         campaign.principal += amount;
-        // Vault açıksa fon escrow'da beklemez: vault'a yatırılır, dönen pay
-        // kampanyaya yazılır. Kapalıysa `shares` 0 kalır (plan 10.3).
+        // With the vault on, funds do not wait in the escrow: they are deposited
+        // into the vault and the returned shares are recorded on the campaign.
+        // With it off, `shares` stays 0 (plan 10.3).
         if let Some(vault) = &cfg.vault {
             campaign.shares += vault_deposit(&env, &cfg.usdc, vault, amount);
         }
@@ -215,8 +217,9 @@ impl PoaEscrow {
         Ok(())
     }
 
-    /// Saha aktörü talep açar. Açmak yetki istemez — para çıkışı 2/3 onaya bağlı,
-    /// talep açmak tek başına zararsız ve sahadaki erişimi kısıtlamak istemiyoruz.
+    /// A field actor opens a request. Opening one needs no authorization — the
+    /// payout depends on 2/3 approvals, opening a request alone is harmless, and we
+    /// do not want to restrict access in the field.
     pub fn create_request(
         env: Env,
         supplier_ref: BytesN<32>,
@@ -226,7 +229,7 @@ impl PoaEscrow {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
-        config(&env)?; // initialize edilmiş mi
+        config(&env)?; // is it initialized
 
         let id: u64 = env
             .storage()
@@ -252,11 +255,11 @@ impl PoaEscrow {
         Ok(id)
     }
 
-    /// Koordinatör onayı. Üçünden ikisi yeterli.
+    /// A coordinator approval. Two of the three are enough.
     ///
-    /// Onay **koordinatörün kendi cüzdanıyla** imzalanır. Her onay ayrı bir
-    /// (request, coordinator) anahtarına yazılır — sadece sayaç tutmak aynı
-    /// koordinatörün iki kez onaylayıp eşiği tek başına geçmesine izin verirdi.
+    /// The approval is signed with the **coordinator's own wallet**. Each approval
+    /// is written under its own (request, coordinator) key — keeping just a counter
+    /// would let one coordinator approve twice and clear the threshold alone.
     pub fn approve_request(
         env: Env,
         coordinator: Address,
@@ -296,7 +299,7 @@ impl PoaEscrow {
         Ok(())
     }
 
-    /// Fon **sabit** relayer adresine çıkar. 2/3 onay şart.
+    /// Funds leave to the **fixed** relayer address. 2/3 approvals are required.
     pub fn execute_payout(env: Env, request_id: u64) -> Result<(), Error> {
         let mut request = get_request(&env, request_id)?;
         if request.completed {
@@ -312,8 +315,8 @@ impl PoaEscrow {
         let cfg = config(&env)?;
         let mut campaign = campaign(&env);
 
-        // Vault açıksa fon orada duruyor: önce pay bozdurulur, USDC escrow'a
-        // döner, sonra relayer'a çıkar (plan 10.3).
+        // With the vault on the funds sit there: shares are unwound first, the USDC
+        // returns to the escrow, and only then goes to the relayer (plan 10.3).
         if let Some(vault) = &cfg.vault {
             campaign.shares -= vault_withdraw(&env, vault, request.amount)?;
         }
@@ -352,7 +355,7 @@ impl PoaEscrow {
         Ok(())
     }
 
-    /* ------------------------------- görünümler ------------------------------ */
+    /* --------------------------------- views --------------------------------- */
 
     pub fn get_config(env: Env) -> Result<Config, Error> {
         config(&env)
@@ -384,14 +387,14 @@ impl PoaEscrow {
         APPROVAL_THRESHOLD
     }
 
-    /// Ödenebilir bakiye. **Vault gelince sadece bu fonksiyonun içi değişir**
-    /// (plan 4.1 kural 3).
+    /// The payable balance. **Adding the vault changes only this function's body**
+    /// (plan 4.1 rule 3).
     pub fn balance(env: Env) -> Result<i128, Error> {
         available_balance(&env)
     }
 }
 
-/* --------------------------------- içsel --------------------------------- */
+/* -------------------------------- internal -------------------------------- */
 
 fn available_balance(env: &Env) -> Result<i128, Error> {
     let cfg = config(env)?;
@@ -399,8 +402,8 @@ fn available_balance(env: &Env) -> Result<i128, Error> {
         None => {
             Ok(token::TokenClient::new(env, &cfg.usdc).balance(&env.current_contract_address()))
         }
-        // Vault açık: bakiye artık token bakiyesi değil, elimizdeki payın
-        // bugünkü karşılığı. Getiri varsa burada görünür.
+        // Vault on: the balance is no longer the token balance but today's value of
+        // the shares we hold. Any yield shows up here.
         Some(vault) => {
             let shares = campaign(env).shares;
             if shares <= 0 {
@@ -412,11 +415,11 @@ fn available_balance(env: &Env) -> Result<i128, Error> {
 }
 
 /* ---------------------------------- vault -------------------------------- */
-// DeFindex vault'u dört metoduyla konuşuyoruz: deposit, withdraw,
-// total_supply, get_asset_amounts_per_shares. Tek asset'li vault varsayımı —
-// dönen vektörlerin ilk elemanı bizim USDC'miz.
+// We talk to the DeFindex vault through four methods: deposit, withdraw,
+// total_supply, get_asset_amounts_per_shares. Single-asset vault assumed — the
+// first element of the returned vectors is our USDC.
 
-/// `shares` kadar payın bugünkü USDC karşılığı.
+/// Today's USDC value of `shares` shares.
 fn shares_to_assets(env: &Env, vault: &Address, shares: i128) -> i128 {
     let amounts: Vec<i128> = env.invoke_contract(
         vault,
@@ -426,12 +429,12 @@ fn shares_to_assets(env: &Env, vault: &Address, shares: i128) -> i128 {
     amounts.get(0).unwrap_or(0)
 }
 
-/// Fonu vault'a yatırır, basılan payı döner.
+/// Deposits funds into the vault and returns the shares minted.
 ///
-/// Vault USDC'yi escrow'un üzerinden kendine çekiyor. O transfer escrow adına
-/// yapılıyor ama escrow'un *doğrudan* çağrısı değil — araya vault giriyor — bu
-/// yüzden token transferi için açıkça yetki verilmesi gerekiyor. Bu satır
-/// olmadan deposit `require_auth` ile düşer.
+/// The vault pulls the USDC to itself through the escrow. That transfer is made on
+/// the escrow's behalf but is not the escrow's *direct* call — the vault sits in
+/// between — so the token transfer has to be authorized explicitly. Without this
+/// line the deposit fails on `require_auth`.
 fn vault_deposit(env: &Env, usdc: &Address, vault: &Address, amount: i128) -> i128 {
     let me = env.current_contract_address();
 
@@ -447,7 +450,7 @@ fn vault_deposit(env: &Env, usdc: &Address, vault: &Address, amount: i128) -> i1
         }),
     ]);
 
-    // Tek asset, swap yok: yatırdığımızın tamamının girmesini bekliyoruz.
+    // Single asset, no swap: we expect all of what we deposit to go in.
     let amounts = vec![env, amount];
     let (_deposited, shares, _allocations): (Vec<i128>, i128, Val) = env.invoke_contract(
         vault,
@@ -455,17 +458,17 @@ fn vault_deposit(env: &Env, usdc: &Address, vault: &Address, amount: i128) -> i1
         vec![
             env,
             amounts.into_val(env), // amounts_desired
-            amounts.into_val(env), // amounts_min — slippage koruması
+            amounts.into_val(env), // amounts_min — slippage protection
             me.into_val(env),
-            // invest: stratejisiz vault'ta no-op, mainnet'te fonu stratejiye
-            // koyar. Aynı kodun iki ağda da doğru davranması için true.
+            // invest: a no-op in a strategy-less vault, on mainnet it puts the funds
+            // into the strategy. true so the same code behaves right on both networks.
             true.into_val(env),
         ],
     );
     shares
 }
 
-/// Vault'tan `amount` USDC çeker, yakılan payı döner.
+/// Withdraws `amount` USDC from the vault and returns the shares burned.
 fn vault_withdraw(env: &Env, vault: &Address, amount: i128) -> Result<i128, Error> {
     let me = env.current_contract_address();
 
@@ -476,8 +479,8 @@ fn vault_withdraw(env: &Env, vault: &Address, amount: i128) -> Result<i128, Erro
         return Err(Error::VaultEmpty);
     }
 
-    // Yukarı yuvarlanıyor: aşağı yuvarlarsak bir stroop eksik çeker ve
-    // relayer'a transfer düşer. Artan toz vault payı olarak escrow'da kalır.
+    // Rounded up: rounding down would withdraw one stroop short and the transfer to
+    // the relayer would fail. The leftover dust stays in the escrow as vault shares.
     let shares_to_burn = total_supply
         .checked_mul(amount)
         .and_then(|v| v.checked_add(total_assets - 1))

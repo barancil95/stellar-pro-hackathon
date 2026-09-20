@@ -1,23 +1,25 @@
 /**
- * TL → USDC on-ramp, bağışçının KENDİ cüzdanına — tarayıcıda çalışır.
+ * TRY → USDC on-ramp, into the donor's OWN wallet — runs in the browser.
  *
- * Bağışçı TL öder, anchor USDC'yi doğrudan bağışçının adresine gönderir, oradan
- * escrow'a yatırılır. USDC hiçbir ara hesaptan geçmez; SEP-10 kimliği de
- * bağışçının cüzdanıyla imzalanır (relayer burada yok).
+ * The donor pays TRY, the anchor sends the USDC straight to the donor's address,
+ * and from there it is deposited into the escrow. The USDC passes through no
+ * intermediate account; the SEP-10 identity is signed with the donor's wallet too
+ * (no relayer here).
  *
- * Anchor'ın CORS'u açık (`*`), o yüzden sunucu route'u gerekmiyor.
+ * The anchor's CORS is open (`*`), so no server route is needed.
  *
- * İki aşama, çünkü arada gerçek hayatta bağışçının bankası var:
- *   1. startOnramp   — SEP-10 → SEP-12 → SEP-6 deposit → havale talimatı
- *   2. settleOnramp  — havale (sandbox'ta simüle) → USDC cüzdanda `completed`
+ * Two stages, because in real life the donor's bank sits in between:
+ *   1. startOnramp   — SEP-10 → SEP-12 → SEP-6 deposit → transfer instructions
+ *   2. settleOnramp  — the transfer (simulated in the sandbox) → USDC in the
+ *                      wallet, `completed`
  */
 
 import * as anchor from './anchor.js';
 
 /**
- * @param wallet  `{ address, sign }` — WalletButton'un verdiği nesne
- * @param tryAmount  string, 2 ondalık
- * @returns { session, deposit } — deposit.instructions banka talimatını taşır
+ * @param wallet  `{ address, sign }` — the object WalletButton hands over
+ * @param tryAmount  string, 2 decimals
+ * @returns { session, deposit } — deposit.instructions carries the bank instructions
  */
 export async function startOnramp({ wallet, tryAmount, onStep }) {
   await anchor.assertOnrampAmount(tryAmount);
@@ -30,7 +32,7 @@ export async function startOnramp({ wallet, tryAmount, onStep }) {
   onStep?.('auth');
   await session.token();
 
-  // KYC kendiliğinden ACCEPTED olmuyor; en az bir PUT gerekiyor.
+  // KYC does not become ACCEPTED on its own; at least one PUT is required.
   onStep?.('kyc');
   await session.call((t) => anchor.putCustomer(t, {}));
 
@@ -42,13 +44,12 @@ export async function startOnramp({ wallet, tryAmount, onStep }) {
 }
 
 /**
- * Sandbox'ta banka havalesini simüle eder ve USDC cüzdana düşene kadar bekler.
- * Gerçek bir anchor'da bu adım bağışçının bankasıdır; biz yalnızca beklerdik.
+ * Simulates the bank transfer in the sandbox and waits until the USDC lands in the
+ * wallet. With a real anchor this step is the donor's bank; we would only wait.
  *
- * `simulated: true` ile çağrılırsa havale tekrarlanmaz, yalnızca beklenir —
- * anchor `pending_anchor`'da takılıp bekleme zaman aşımına uğrarsa aynı deposit
- * üzerinden yeniden sorulabilsin diye. İkinci bir havale ikinci bir TL demek
- * olurdu.
+ * Called with `simulated: true` the transfer is not repeated, only awaited — so
+ * that if the anchor stalls in `pending_anchor` and the wait times out, the same
+ * deposit can be polled again. A second transfer would mean a second TRY payment.
  */
 export async function settleOnramp({
   session,
@@ -72,7 +73,7 @@ export async function settleOnramp({
 
   if (settled.status !== 'completed') {
     throw new Error(
-      `On-ramp ${settled.status} ile bitti${settled.message ? `: ${settled.message}` : ''}`,
+      `On-ramp ended as ${settled.status}${settled.message ? `: ${settled.message}` : ''}`,
     );
   }
   return settled;

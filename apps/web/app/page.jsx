@@ -9,9 +9,9 @@ import MultisigPanel from '../components/MultisigPanel.jsx';
 import { health } from '../lib/anchor.js';
 
 const TABS = [
-  { id: 'donor', label: 'Bağış' },
-  { id: 'field', label: 'Saha talebi' },
-  { id: 'multisig', label: 'Onay & denetim' },
+  { id: 'donor', label: 'Donate' },
+  { id: 'field', label: 'Field request' },
+  { id: 'multisig', label: 'Approve & audit' },
 ];
 
 export default function Home() {
@@ -21,7 +21,7 @@ export default function Home() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [walletError, setWalletError] = useState(null);
 
-  // Issuer ve kurlar hardcode edilmez — /health'ten okunur.
+  // The issuer and the rates are not hardcoded — they are read from /health.
   useEffect(() => {
     health().then(setAnchor).catch(() => {});
   }, []);
@@ -44,7 +44,7 @@ export default function Home() {
 
       {walletError && (
         <p className="mb-6 rounded-lg border border-signal/30 bg-signal/5 px-3 py-2.5 text-sm text-signal">
-          Cüzdan bağlanamadı: {walletError}
+          Wallet could not connect: {walletError}
         </p>
       )}
 
@@ -54,10 +54,11 @@ export default function Home() {
           <span className="text-signal"> speed of crisis.</span>
         </h1>
         <p className="mt-5 text-base leading-relaxed text-muted">
-          Bağışlar merkezi bir havuzda beklemez. Sahadaki doğrulanmış aktör ihtiyaç
-          kanıtıyla talep açar, koordinatörlerden <b className="text-white">2/3 onay</b> gelince
-          fon zincirden çıkar ve tedarikçinin IBAN'ına TRY olarak ulaşır.
-          Her adım zincirde izlenebilir.
+          Donations do not wait in a central pool. A verified actor in the field opens
+          a request with proof of need, and once{' '}
+          <b className="text-white">2 of 3 coordinators approve</b>, the funds leave
+          the chain and reach the supplier's IBAN as TRY. Every step is traceable
+          on-chain.
         </p>
       </header>
 
@@ -116,20 +117,21 @@ function AnchorCard({ anchor }) {
       {anchor ? (
         <dl className="space-y-3 text-sm">
           <Row label="Anchor" value={anchor.service} />
-          <Row label="Kur (USDC/TRY)" value={anchor.rates.sell_rate} />
+          <Row label="Rate (USDC/TRY)" value={anchor.rates.sell_rate} />
           <Row label="Spread" value={`${anchor.rates.spread_bps} bps`} />
           <Row
             label="Treasury"
-            value={anchor.treasury.low_balance ? 'düşük — on-ramp bekler' : 'hazır'}
+            value={anchor.treasury.low_balance ? 'low — the on-ramp will wait' : 'ready'}
             ok={!anchor.treasury.low_balance}
           />
         </dl>
       ) : (
-        <p className="text-sm text-muted">Anchor okunuyor…</p>
+        <p className="text-sm text-muted">Reading the anchor…</p>
       )}
       <p className="mt-5 border-t border-edge pt-5 text-xs leading-relaxed text-muted">
-        Zincir üstü kısım güven gerektirmiyor — onay yetkisi 2/3 multisig'te.
-        Custody yalnızca fiat rail'in son metresinde, ve o metre zaten bankanın.
+        The on-chain part is trustless — approval authority sits in a 2-of-3 multisig.
+        Custody exists only on the last metre of the fiat rail, and that metre already
+        belongs to the bank.
       </p>
     </section>
   );

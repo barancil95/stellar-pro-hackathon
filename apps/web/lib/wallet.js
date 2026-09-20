@@ -1,9 +1,10 @@
 /**
  * Stellar Wallets Kit — `allowAllModules()`.
  *
- * Bu, hackathon'un Integration şartının (#1) karşılığı. Sadece Freighter
- * kullanmak yetmez: Freighter curated listede yok, Kit'in altında bir modül.
- * 2/3 onay akışı da zaten farklı cüzdanlarla imzalamayı gerektiriyor.
+ * This is what satisfies the hackathon's Integration requirement (#1). Using only
+ * Freighter would not be enough: Freighter is not on the curated list, it is a
+ * module under the Kit. The 2/3 approval flow requires signing with different
+ * wallets anyway.
  */
 
 'use client';
@@ -17,7 +18,7 @@ import {
 
 let kit = null;
 
-/** Kit tarayıcıda yaşar — SSR sırasında oluşturulamaz. */
+/** The Kit lives in the browser — it cannot be constructed during SSR. */
 export function getKit() {
   if (typeof window === 'undefined') return null;
   if (!kit) {
@@ -31,8 +32,8 @@ export function getKit() {
 }
 
 /**
- * Cüzdan seçtirir ve adresi döner.
- * Freighter varsayılan olarak Mainnet'te açılır — kullanıcı Testnet'e almalı.
+ * Prompts for a wallet and returns the address.
+ * Freighter opens on Mainnet by default — the user has to switch to Testnet.
  */
 export async function connect() {
   const k = getKit();
@@ -52,12 +53,12 @@ export async function connect() {
           reject(e);
         }
       },
-      onClosed: () => reject(new Error('Cüzdan seçimi iptal edildi')),
+      onClosed: () => reject(new Error('Wallet selection cancelled')),
     });
   });
 }
 
-/** stellar-sdk'nın contract istemcisinin beklediği imzalayıcı şekli. */
+/** The signer shape stellar-sdk's contract client expects. */
 export function signer(address) {
   return async (xdr, opts) => {
     const k = getKit();
@@ -69,12 +70,12 @@ export function signer(address) {
   };
 }
 
-/* ----------------------------- demo imzalayıcı --------------------------- */
+/* ------------------------------ demo signer ------------------------------ */
 
 /**
- * Eklenti gerektirmeyen yedek yol. Anahtar tarayıcıda bellekte durur,
- * imza yerel atılır. Yalnızca testnet demo hesapları için — sunucu tarafı
- * DEMO_MODE=true değilse zaten anahtar vermez.
+ * A fallback path that needs no extension. The key stays in browser memory and the
+ * signature is made locally. For testnet demo accounts only — the server hands out
+ * no key unless DEMO_MODE=true.
  */
 export async function loadDemoAccounts() {
   try {
@@ -89,7 +90,7 @@ export async function loadDemoAccounts() {
 
 export function demoSigner(secret) {
   return async (xdr, opts) => {
-    // stellar-sdk tarayıcıda da çalışıyor; dinamik import bundle'ı şişirmesin diye.
+    // stellar-sdk works in the browser too; imported dynamically to keep the bundle small.
     const { Keypair, TransactionBuilder } = await import('@stellar/stellar-sdk');
     const keypair = Keypair.fromSecret(secret);
     const passphrase =

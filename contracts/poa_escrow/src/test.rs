@@ -4,7 +4,7 @@ use super::*;
 use soroban_sdk::testutils::{Address as _, MockAuth, MockAuthInvoke};
 use soroban_sdk::token::{StellarAssetClient, TokenClient};
 
-const DEPOSIT: i128 = 1_000_0000000; // 1000 USDC, 7 ondalık
+const DEPOSIT: i128 = 1_000_0000000; // 1000 USDC, 7 decimals
 
 struct Ctx {
     env: Env,
@@ -21,8 +21,8 @@ fn setup() -> Ctx {
     build(false)
 }
 
-/// Escrow + (istenirse) DeFindex-uyumlu mock vault. Vault'un asset'i
-/// escrow'unkiyle aynı olmak zorunda — gerçek hayatta M0'ın yakaladığı tuzak.
+/// Escrow plus (optionally) a DeFindex-compatible mock vault. The vault's asset
+/// has to match the escrow's — the trap M0 caught in real life.
 fn setup_vaulted() -> Ctx {
     build(true)
 }
@@ -74,14 +74,14 @@ impl Ctx {
         BytesN::from_array(&self.env, &[b; 32])
     }
     fn vault(&self) -> Address {
-        self.vault.clone().expect("bu ctx vault'suz kuruldu")
+        self.vault.clone().expect("this ctx was built without a vault")
     }
-    /// Vault'a dışarıdan USDC basar — strateji getirisinin karşılığı.
-    /// Pay sayısı sabit kalır, payın değeri artar.
+    /// Mints USDC into the vault from outside — the stand-in for strategy yield.
+    /// The share count stays fixed, the value per share rises.
     fn accrue_yield(&self, amount: i128) {
         StellarAssetClient::new(&self.env, &self.usdc).mint(&self.vault(), &amount);
     }
-    /// Eşiği geçiren iki ayrı koordinatör onayı.
+    /// Two distinct coordinator approvals, enough to clear the threshold.
     fn approve_two(&self, id: u64) {
         let c = self.client();
         c.approve_request(&self.coords[0], &id);
@@ -98,10 +98,10 @@ fn deposit_moves_usdc_into_escrow() {
 
     c.deposit(&ctx.donor, &DEPOSIT);
 
-    assert_eq!(ctx.usdc().balance(&ctx.contract), DEPOSIT, "escrow bakiyesi");
-    assert_eq!(c.balance(), DEPOSIT, "available_balance SAC'tan okur");
+    assert_eq!(ctx.usdc().balance(&ctx.contract), DEPOSIT, "escrow balance");
+    assert_eq!(c.balance(), DEPOSIT, "available_balance reads from the SAC");
     assert_eq!(c.get_campaign().principal, DEPOSIT);
-    assert_eq!(c.get_campaign().shares, 0, "vault kapalı → shares 0 kalmalı");
+    assert_eq!(c.get_campaign().shares, 0, "vault off → shares must stay 0");
 }
 
 #[test]
@@ -142,7 +142,7 @@ fn create_request_assigns_sequential_ids_and_stores_proof() {
     let r = c.get_request(&first);
     assert_eq!(r.amount, 500_0000000);
     assert_eq!(r.proof_hash, ctx.proof(0xBB));
-    assert_eq!(r.supplier_ref, ctx.proof(0xAA), "IBAN değil, hash'i saklanır");
+    assert_eq!(r.supplier_ref, ctx.proof(0xAA), "the hash is stored, not the IBAN");
     assert_eq!(r.approvals_count, 0);
     assert!(!r.completed);
 }
@@ -176,11 +176,11 @@ fn payout_sends_to_configured_relayer() {
     ctx.approve_two(id);
     c.execute_payout(&id);
 
-    assert_eq!(ctx.usdc().balance(&ctx.relayer), amount, "fon relayer'a gitti");
+    assert_eq!(ctx.usdc().balance(&ctx.relayer), amount, "funds went to the relayer");
     assert_eq!(ctx.usdc().balance(&ctx.contract), DEPOSIT - amount);
     assert!(c.get_request(&id).completed);
     assert_eq!(c.get_campaign().disbursed, amount);
-    assert_eq!(c.get_campaign().principal, DEPOSIT, "principal ödemeyle azalmaz");
+    assert_eq!(c.get_campaign().principal, DEPOSIT, "principal is not reduced by a payout");
 }
 
 #[test]
@@ -196,7 +196,7 @@ fn payout_cannot_run_twice() {
     assert_eq!(
         c.try_execute_payout(&id),
         Err(Ok(Error::AlreadyCompleted)),
-        "mükerrer ödeme engellenmeli"
+        "a double payout must be blocked"
     );
     assert_eq!(ctx.usdc().balance(&ctx.relayer), 100_0000000);
 }
@@ -240,11 +240,11 @@ fn approvals_accumulate_per_coordinator() {
 
     c.approve_request(&ctx.coords[1], &id);
     assert_eq!(c.get_request(&id).approvals_count, 2);
-    assert!(!c.has_approved(&id, &ctx.coords[2]), "üçüncü onaylamadı");
+    assert!(!c.has_approved(&id, &ctx.coords[2]), "the third one did not approve");
 }
 
-/// Asıl tehlike: tek koordinatörün iki kez onaylayıp eşiği tek başına geçmesi.
-/// Sadece `approvals_count` tutsaydık bu mümkün olurdu (plan 4.2).
+/// The real danger: one coordinator approving twice and clearing the threshold
+/// alone. Keeping only `approvals_count` would have allowed it (plan 4.2).
 #[test]
 fn same_coordinator_cannot_approve_twice() {
     let ctx = setup();
@@ -257,11 +257,11 @@ fn same_coordinator_cannot_approve_twice() {
         c.try_approve_request(&ctx.coords[0], &id),
         Err(Ok(Error::AlreadyApproved))
     );
-    assert_eq!(c.get_request(&id).approvals_count, 1, "sayaç artmamalı");
+    assert_eq!(c.get_request(&id).approvals_count, 1, "the counter must not increase");
     assert_eq!(
         c.try_execute_payout(&id),
         Err(Ok(Error::InsufficientApprovals)),
-        "tek koordinatör kendi başına ödeme çıkaramamalı"
+        "one coordinator alone must not be able to release funds"
     );
 }
 
@@ -279,7 +279,8 @@ fn outsider_cannot_approve() {
     assert_eq!(c.get_request(&id).approvals_count, 0);
 }
 
-/// Onay koordinatörün kendi imzasını gerektirir — başkası onun adına onaylayamaz.
+/// An approval requires the coordinator's own signature — nobody can approve on
+/// their behalf.
 #[test]
 fn approval_requires_the_coordinator_signature() {
     let ctx = setup();
@@ -287,10 +288,10 @@ fn approval_requires_the_coordinator_signature() {
         .client()
         .create_request(&ctx.proof(1), &(10_0000000), &ctx.proof(2));
 
-    ctx.env.set_auths(&[]); // hiçbir imza sunulmuyor
+    ctx.env.set_auths(&[]); // no signature is presented
     assert!(
         ctx.client().try_approve_request(&ctx.coords[0], &id).is_err(),
-        "imzasız onay kabul edilmemeli"
+        "an unsigned approval must be rejected"
     );
 }
 
@@ -304,19 +305,19 @@ fn payout_blocked_below_threshold() {
     assert_eq!(
         c.try_execute_payout(&id),
         Err(Ok(Error::InsufficientApprovals)),
-        "0 onayla ödeme olmaz"
+        "no payout with 0 approvals"
     );
 
     c.approve_request(&ctx.coords[0], &id);
     assert_eq!(
         c.try_execute_payout(&id),
         Err(Ok(Error::InsufficientApprovals)),
-        "1/3 yetmez"
+        "1/3 is not enough"
     );
 
     c.approve_request(&ctx.coords[2], &id);
     c.execute_payout(&id);
-    assert_eq!(ctx.usdc().balance(&ctx.relayer), 10_0000000, "2/3 yeter");
+    assert_eq!(ctx.usdc().balance(&ctx.relayer), 10_0000000, "2/3 is enough");
 }
 
 #[test]
@@ -344,14 +345,14 @@ fn approvals_are_scoped_to_their_request() {
     let second = c.create_request(&ctx.proof(3), &(10_0000000), &ctx.proof(4));
 
     ctx.approve_two(first);
-    assert_eq!(c.get_request(&second).approvals_count, 0, "onaylar sızmamalı");
+    assert_eq!(c.get_request(&second).approvals_count, 0, "approvals must not leak across requests");
     assert_eq!(
         c.try_execute_payout(&second),
         Err(Ok(Error::InsufficientApprovals))
     );
 }
 
-/* -------------------------------- yapılandırma ---------------------------- */
+/* ------------------------------- configuration ---------------------------- */
 
 #[test]
 fn initialize_is_one_shot() {
@@ -395,7 +396,7 @@ fn update_relayer_redirects_future_payouts() {
     c.execute_payout(&id);
 
     assert_eq!(ctx.usdc().balance(&new_relayer), 50_0000000);
-    assert_eq!(ctx.usdc().balance(&ctx.relayer), 0, "eski relayer para almamalı");
+    assert_eq!(ctx.usdc().balance(&ctx.relayer), 0, "the old relayer must not get paid");
 }
 
 #[test]
@@ -410,12 +411,12 @@ fn uninitialized_contract_reports_it() {
 
 /* ================================ vault =================================== */
 
-/// DeFindex vault'unun bizi ilgilendiren dört metodunu taklit eder.
+/// Mimics the four DeFindex vault methods we care about.
 ///
-/// Önemli olan yüzeyin aynı olması değil, **auth davranışının** aynı olması:
-/// `from.require_auth()` çağırıyor ve USDC'yi escrow'un üzerinden kendine
-/// çekiyor. Escrow `authorize_as_current_contract` yazmazsa bu mock da
-/// gerçek vault gibi reddeder.
+/// What matters is not that the surface matches but that the **auth behaviour**
+/// does: it calls `from.require_auth()` and pulls the USDC to itself through the
+/// escrow. Without the escrow's `authorize_as_current_contract`, this mock rejects
+/// the call just like the real vault would.
 #[contract]
 pub struct MockVault;
 
@@ -435,7 +436,7 @@ fn v_supply(env: &Env) -> i128 {
     env.storage().instance().get(&VKey::Supply).unwrap_or(0)
 }
 
-/// Vault'un yönettiği toplam USDC — strateji getirisi dahil.
+/// Total USDC the vault manages — strategy yield included.
 fn v_managed(env: &Env) -> i128 {
     TokenClient::new(env, &v_asset(env)).balance(&env.current_contract_address())
 }
@@ -455,7 +456,7 @@ impl MockVault {
         invest: bool,
     ) -> (Vec<i128>, i128, Option<Vec<i128>>) {
         from.require_auth();
-        let _ = invest; // stratejisiz vault'ta no-op — gerçeğindeki gibi
+        let _ = invest; // a no-op in a strategy-less vault — same as the real one
         let amount = amounts_desired.get(0).unwrap();
         assert!(amount >= amounts_min.get(0).unwrap(), "slippage");
 
@@ -468,7 +469,7 @@ impl MockVault {
             &amount,
         );
 
-        // İlk yatırım 1:1; sonrası güncel pay fiyatından.
+        // The first deposit is 1:1; later ones at the current share price.
         let shares = if supply == 0 || managed_before == 0 {
             amount
         } else {
@@ -502,7 +503,7 @@ impl MockVault {
             .instance()
             .get(&VKey::Shares(from.clone()))
             .unwrap_or(0);
-        assert!(mine >= df_amount, "yetersiz pay");
+        assert!(mine >= df_amount, "insufficient shares");
 
         env.storage()
             .instance()
@@ -537,11 +538,11 @@ fn vault_open_moves_deposit_into_the_vault() {
 
     c.deposit(&ctx.donor, &DEPOSIT);
 
-    assert_eq!(ctx.usdc().balance(&ctx.contract), 0, "escrow'da para durmamalı");
-    assert_eq!(ctx.usdc().balance(&ctx.vault()), DEPOSIT, "vault'a geçmeli");
-    assert_eq!(c.get_campaign().shares, DEPOSIT, "pay kaydedilmeli");
-    assert_eq!(c.get_campaign().principal, DEPOSIT, "anapara ayrı tutulmalı");
-    assert_eq!(c.balance(), DEPOSIT, "bakiye payın karşılığından okunmalı");
+    assert_eq!(ctx.usdc().balance(&ctx.contract), 0, "no funds should sit in the escrow");
+    assert_eq!(ctx.usdc().balance(&ctx.vault()), DEPOSIT, "it must move into the vault");
+    assert_eq!(c.get_campaign().shares, DEPOSIT, "shares must be recorded");
+    assert_eq!(c.get_campaign().principal, DEPOSIT, "principal is tracked separately");
+    assert_eq!(c.balance(), DEPOSIT, "the balance must be read from the value of the shares");
 }
 
 #[test]
@@ -552,23 +553,23 @@ fn vault_closed_keeps_the_old_behaviour() {
     c.deposit(&ctx.donor, &DEPOSIT);
 
     assert_eq!(ctx.usdc().balance(&ctx.contract), DEPOSIT);
-    assert_eq!(c.get_campaign().shares, 0, "vault kapalıyken pay basılmaz");
+    assert_eq!(c.get_campaign().shares, 0, "no shares are minted while the vault is off");
     assert_eq!(c.balance(), DEPOSIT);
 }
 
-/// Getiri payın **sayısını** değil **değerini** büyütür. Ödenebilir bakiye
-/// anaparayı aşar — vault'un tek gözle görülür faydası bu.
+/// Yield grows the **value** of the shares, not their **count**. The payable
+/// balance exceeds the principal — the vault's one visible benefit.
 #[test]
 fn vault_yield_raises_available_balance_above_principal() {
     let ctx = setup_vaulted();
     let c = ctx.client();
     c.deposit(&ctx.donor, &DEPOSIT);
 
-    ctx.accrue_yield(DEPOSIT / 10); // %10
+    ctx.accrue_yield(DEPOSIT / 10); // 10%
 
-    assert_eq!(c.get_campaign().shares, DEPOSIT, "pay sayısı sabit");
-    assert_eq!(c.get_campaign().principal, DEPOSIT, "anapara sabit");
-    assert_eq!(c.balance(), DEPOSIT + DEPOSIT / 10, "değer arttı");
+    assert_eq!(c.get_campaign().shares, DEPOSIT, "the share count is fixed");
+    assert_eq!(c.get_campaign().principal, DEPOSIT, "principal is fixed");
+    assert_eq!(c.balance(), DEPOSIT + DEPOSIT / 10, "the value rose");
 }
 
 #[test]
@@ -582,20 +583,20 @@ fn vault_payout_unwinds_shares_and_pays_the_relayer() {
     ctx.approve_two(id);
     c.execute_payout(&id);
 
-    assert_eq!(ctx.usdc().balance(&ctx.relayer), amount, "relayer ödendi");
-    assert_eq!(c.get_campaign().shares, DEPOSIT - amount, "pay bozduruldu");
+    assert_eq!(ctx.usdc().balance(&ctx.relayer), amount, "the relayer was paid");
+    assert_eq!(c.get_campaign().shares, DEPOSIT - amount, "shares were unwound");
     assert_eq!(c.get_campaign().disbursed, amount);
-    assert_eq!(c.balance(), DEPOSIT - amount, "kalan vault'ta");
-    assert_eq!(ctx.usdc().balance(&ctx.contract), 0, "escrow'da toz kalmamalı");
+    assert_eq!(c.balance(), DEPOSIT - amount, "the remainder is in the vault");
+    assert_eq!(ctx.usdc().balance(&ctx.contract), 0, "no dust should be left in the escrow");
 }
 
-/// Getiri birikmişken ödeme: aynı USDC için **daha az** pay yakılır.
+/// A payout with yield accrued: **fewer** shares are burned for the same USDC.
 #[test]
 fn vault_payout_burns_fewer_shares_after_yield() {
     let ctx = setup_vaulted();
     let c = ctx.client();
     c.deposit(&ctx.donor, &DEPOSIT);
-    ctx.accrue_yield(DEPOSIT); // pay fiyatı ikiye katlandı
+    ctx.accrue_yield(DEPOSIT); // the share price doubled
 
     let amount = 50_0000000;
     let id = c.create_request(&ctx.proof(1), &amount, &ctx.proof(2));
@@ -603,12 +604,13 @@ fn vault_payout_burns_fewer_shares_after_yield() {
     c.execute_payout(&id);
 
     assert_eq!(ctx.usdc().balance(&ctx.relayer), amount);
-    // 1 pay = 2 USDC → 50 USDC için 25 pay.
-    assert_eq!(c.get_campaign().shares, DEPOSIT - amount / 2, "yarısı kadar pay");
-    assert_eq!(c.balance(), 2 * DEPOSIT - amount, "kalan değer");
+    // 1 share = 2 USDC → 25 shares for 50 USDC.
+    assert_eq!(c.get_campaign().shares, DEPOSIT - amount / 2, "half as many shares");
+    assert_eq!(c.balance(), 2 * DEPOSIT - amount, "the remaining value");
 }
 
-/// Eşik kontrolü vault'ta da bakiyeye bakar: vault boşken ödeme çıkmaz.
+/// The threshold check looks at the balance with the vault too: no payout while
+/// the vault is empty.
 #[test]
 fn vault_payout_blocked_when_balance_is_short() {
     let ctx = setup_vaulted();
@@ -625,16 +627,16 @@ fn vault_payout_blocked_when_balance_is_short() {
 #[test]
 fn vault_balance_is_zero_before_any_deposit() {
     let ctx = setup_vaulted();
-    assert_eq!(ctx.client().balance(), 0, "pay yokken bakiye 0, hata değil");
+    assert_eq!(ctx.client().balance(), 0, "with no shares the balance is 0, not an error");
 }
 
-/// `authorize_as_current_contract` gerçekten yük taşıyor mu.
+/// Does `authorize_as_current_contract` actually carry weight?
 ///
-/// Diğer testler `mock_all_auths()` altında koşuyor; orada her yetki
-/// onaylandığı için o satır silinse de geçerlerdi. Burada **yalnızca
-/// bağışçının** imzası mock'lanıyor. Vault'un escrow üzerinden yaptığı USDC
-/// çekişini onaylayan tek şey contract'ın kendi yetkilendirmesi — satır
-/// kalkarsa bu test düşer.
+/// The other tests run under `mock_all_auths()`, where every authorization is
+/// granted, so they would pass even with that line deleted. Here **only the
+/// donor's** signature is mocked. The only thing authorizing the vault's USDC pull
+/// through the escrow is the contract's own authorization — remove the line and
+/// this test fails.
 #[test]
 fn vault_deposit_authorizes_its_own_token_pull() {
     let ctx = setup_vaulted();

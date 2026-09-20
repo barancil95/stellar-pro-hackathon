@@ -3,7 +3,7 @@ import { registerSupplierRecord, listSuppliers } from '../../../lib/store.js';
 
 export const dynamic = 'force-dynamic';
 
-/** Türk IBAN'ı: TR + 24 hane, mod-97. Anchor da doğruluyor; burada erken yakalıyoruz. */
+/** A Turkish IBAN: TR + 24 digits, mod-97. The anchor validates it too; we catch it early here. */
 function validTurkishIban(raw) {
   const iban = String(raw || '').replace(/\s/g, '').toUpperCase();
   if (!/^TR\d{24}$/.test(iban)) return null;
@@ -23,18 +23,18 @@ export async function POST(request) {
   const normalized = validTurkishIban(iban);
   if (!normalized) {
     return NextResponse.json(
-      { error: 'Geçersiz IBAN — TR + 24 hane olmalı ve mod-97 tutmalı' },
+      { error: 'Invalid IBAN — it must be TR + 24 digits and satisfy mod-97' },
       { status: 400 },
     );
   }
   if (!name?.trim()) {
-    return NextResponse.json({ error: 'Tedarikçi adı gerekli' }, { status: 400 });
+    return NextResponse.json({ error: 'A supplier name is required' }, { status: 400 });
   }
 
   const { supplierId, supplierRef, name: stored } = await registerSupplierRecord({
     name: name.trim(),
     iban: normalized,
   });
-  // IBAN geri dönmez — zincire giden de bu değil, hash'i.
+  // The IBAN is never returned — and it is the hash, not the IBAN, that goes on-chain.
   return NextResponse.json({ supplierId, supplierRef, name: stored });
 }

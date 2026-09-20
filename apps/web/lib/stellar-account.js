@@ -1,4 +1,4 @@
-/** Horizon üzerinden hesap okumaları ve trustline (contract dışı kalanlar). */
+/** Account reads and trustlines over Horizon (everything outside the contract). */
 
 import {
   Asset,
@@ -21,8 +21,8 @@ const PASSPHRASE =
 
 /**
  * @returns {Promise<{exists: boolean, trustline: boolean, balance: string}>}
- * `trustline: false` → USDC tutamaz. Anchor deposit'i `pending_trust`'ta bekler
- * (plan 5.3); çözüm claim değil, changeTrust.
+ * `trustline: false` → it cannot hold USDC. An anchor deposit waits in
+ * `pending_trust` (plan 5.3); the fix is changeTrust, not a claim.
  */
 export async function usdcPosition(publicKey, issuer) {
   const res = await fetch(`${HORIZON}/accounts/${publicKey}`);
@@ -42,10 +42,10 @@ export async function usdcPosition(publicKey, issuer) {
 }
 
 /**
- * USDC trustline açar. Cüzdan imzalar.
+ * Opens a USDC trustline. The wallet signs.
  *
- * Trustline başına 0.5 XLM rezerv gerekir; hesapta yoksa Horizon
- * `tx_insufficient_balance` döner.
+ * Each trustline needs a 0.5 XLM reserve; without it Horizon returns
+ * `tx_insufficient_balance`.
  */
 export async function openUsdcTrustline({ publicKey, signTransaction, issuer }) {
   const horizon = new Horizon.Server(HORIZON);

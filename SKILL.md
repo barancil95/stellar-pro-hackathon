@@ -1,12 +1,14 @@
-# Stellar Mock Anchor Entegrasyon Skill'i
+# Stellar Mock Anchor Integration Skill
 
-Sen bir Stellar geliştirici asistanısın. Görevin, geliştiricinin **TR Mock Anchor** (testnet TRY/USDC on/off-ramp) ile entegrasyonunu yapmaktır.
+You are a Stellar developer assistant. Your job is to integrate the developer's
+application with the **TR Mock Anchor** (a testnet TRY/USDC on/off-ramp).
 
-> **Sürüm notu.** Bu dosya `@stellar/stellar-sdk` **v14** ile doğrulandı.
-> Aşağıdaki düzeltmeler Proof-of-Action uygulaması sırasında gerçek çağrılarla
-> ölçüldü; eski hâlindeki örnekler v14'te ilk satırda patlıyordu.
+> **Version note.** This file was verified against `@stellar/stellar-sdk` **v14**.
+> The corrections below were measured with real calls while building
+> Proof-of-Action; the examples in the earlier version blew up on the first line
+> under v14.
 
-## Mock Anchor Bilgileri
+## Mock Anchor details
 
 ```
 Home Domain: tr-mock-anchor.fly.dev
@@ -18,24 +20,24 @@ Treasury: GCLCZEQZ2THTEDAOFI66LACNPLY4OBKN7VKLEZFMBIHYKYQOW2W7T3Z6
 Signing Key: GDXYO6FJCNXZEWGXD54GT76FGFYLOLSOGSOJLNQ6WGHCGEQPO7NTE73M
 ```
 
-⚠️ Bunları **hardcode etme**. Sandbox etkinlik öncesi sıfırlanabilir ve
-adresler değişebilir. Hepsi `GET /health`'ten okunur — auth istemez, CORS açık:
+⚠️ Do **not hardcode** these. The sandbox can be reset before the event and the
+addresses can change. They are all read from `GET /health` — no auth, CORS open:
 
 ```js
 const h = await fetch('https://tr-mock-anchor.fly.dev/health').then(r => r.json());
-h.asset.issuer            // USDC issuer
+h.asset.issuer            // the USDC issuer
 h.sep.web_auth_endpoint   // /auth
 h.sep.transfer_server     // /sep6
 h.sep.kyc_server          // /sep12
 h.sep.anchor_quote_server // /sep38
-h.sep.signing_key         // callback imza doğrulaması
-h.treasury.address        // withdraw hedefi
-h.treasury.low_balance    // true ise on-ramp bekler
+h.sep.signing_key         // for callback signature verification
+h.treasury.address        // the withdrawal destination
+h.treasury.low_balance    // when true, the on-ramp will wait
 h.rates.buy_rate / h.rates.sell_rate
-h.limits                  // min/max — aşağıdaki nota bak
+h.limits                  // min/max — see the note below
 ```
 
-## Endpoint'ler
+## Endpoints
 
 ```
 stellar.toml:  GET  https://tr-mock-anchor.fly.dev/.well-known/stellar.toml
@@ -47,31 +49,31 @@ SEP-6 Transfer:     https://tr-mock-anchor.fly.dev/sep6
 Health:        GET  https://tr-mock-anchor.fly.dev/health
 ```
 
-## Limitler ve Format
+## Limits and formats
 
-- **Limitler `/health`'ten okunur.** Ölçüldüğünde `min_onramp_try`,
-  `max_onramp_try` ve `min_offramp_usdc` **`null`** dönüyordu — yani limit
-  uygulanmıyor. `null` gelebileceğini varsayarak kod yaz; sabit 50/3000 TRY
-  tavanı **varsayma**.
-- Off-ramp alt sınırı dokümante edilen değer: 1 USDC.
-- TRY: 2 ondalık basamak · USDC: 7 ondalık basamak
-- Kur kaynağı: Reflector oracle + 50 bps spread (her iki yönde)
-- Tutarları **string** olarak taşı. Float kullanırsan kuruş kaybedersin.
+- **Limits are read from `/health`.** When measured, `min_onramp_try`,
+  `max_onramp_try` and `min_offramp_usdc` all came back **`null`** — meaning no
+  limit is enforced. Write code that assumes `null` is possible; do **not assume** a
+  fixed 50/3000 TRY ceiling.
+- The documented off-ramp minimum is 1 USDC.
+- TRY: 2 decimal places · USDC: 7 decimal places
+- Rate source: Reflector oracle plus a 50 bps spread (in both directions)
+- Carry amounts as **strings**. Use floats and you lose cents.
 
-## Entegrasyon Akışı
+## Integration flow
 
-### 1. stellar.toml keşfet (SEP-1)
+### 1. Discover stellar.toml (SEP-1)
 
 ```js
 import { StellarToml } from '@stellar/stellar-sdk';
 
-// ⚠️ v14'te `StellarTomlResolver` diye bir export YOK.
+// ⚠️ There is NO `StellarTomlResolver` export in v14.
 const toml = await StellarToml.Resolver.resolve('tr-mock-anchor.fly.dev');
 // toml.WEB_AUTH_ENDPOINT / TRANSFER_SERVER / KYC_SERVER / ANCHOR_QUOTE_SERVER
 // toml.SIGNING_KEY · toml.CURRENCIES[0].issuer
 ```
 
-### 2. Kimlik doğrulama (SEP-10)
+### 2. Authentication (SEP-10)
 
 ```js
 import { TransactionBuilder, Keypair, Networks } from '@stellar/stellar-sdk';
@@ -90,67 +92,68 @@ const { token } = await fetch('https://tr-mock-anchor.fly.dev/auth', {
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ transaction: tx.toXDR() }),
 }).then(r => r.json());
-// Sonraki tüm isteklerde: Authorization: Bearer ${token}
+// On every subsequent request: Authorization: Bearer ${token}
 ```
 
-JWT dolduğunda 401/403 gelir. **Otomatik yenileme yaz** — tek seferlik token
-tutmak uzun akışlarda ortada kopar.
+When the JWT expires you get a 401/403. **Write automatic renewal** — holding a
+single token breaks in the middle of long flows.
 
-### 2b. ⚠️ Memo kapsamlı kimlik — TRY kimin IBAN'ına gidiyor
+### 2b. ⚠️ Memo-scoped identity — whose IBAN the TRY goes to
 
-Bu, off-ramp'te **en kritik ve en kolay kaçırılan** detay.
+This is the **most critical and most easily missed** detail of the off-ramp.
 
-Off-ramp, TRY'yi **SEP-10 auth yapan kimliğin** SEP-12 kaydındaki IBAN'a öder.
-Tek bir servis hesabıyla (ör. bir relayer) birden fazla tedarikçiye ödeme
-yapıyorsan ve memo'suz auth edersen, **para hep o servis hesabının IBAN'ına
-gider** — tedarikçinin değil.
+The off-ramp pays the TRY to the IBAN in the SEP-12 record of **whichever identity
+did the SEP-10 auth**. If you pay multiple suppliers from a single service account
+(a relayer, say) and authenticate without a memo, **the money always goes to that
+service account's IBAN** — not the supplier's.
 
-Çözüm: `&memo=` ile kapsamlanmış müşteri kimliği. JWT'nin `sub`'ı `G…:memo`
-olur ve anchor bunu ayrı müşteri sayar.
+The fix: a customer identity scoped with `&memo=`. The JWT's `sub` becomes
+`G…:memo` and the anchor counts it as a separate customer.
 
 ```js
-// Tedarikçi başına ayrı kimlik — tek Stellar hesabı, çok müşteri
+// A separate identity per supplier — one Stellar account, many customers
 const url = `https://tr-mock-anchor.fly.dev/auth` +
             `?account=${servicePublicKey}&memo=${supplierId}`;   // supplierId: uint64
 // → JWT sub = "GABC…XYZ:77001"
 
-// Bu token'la yapılan SEP-12 PUT ve SEP-6 withdraw, O tedarikçiye bağlanır
+// The SEP-12 PUT and SEP-6 withdrawal made with this token bind to THAT supplier
 ```
 
-Ölçülen sonuç — iki tedarikçi, iki ayrı IBAN, doğru yönlendirme:
+The measured result — two suppliers, two separate IBANs, correctly routed:
 
-| memo | JWT sub | anchor'ın `to` alanı |
+| memo | JWT sub | The anchor's `to` field |
 |---|---|---|
 | 77001 | `GBML…:77001` | `TR3200100099999012345678 90` |
 | 77002 | `GBML…:77002` | `TR9700062011110000066723 15` |
 
 ### 3. KYC (SEP-12)
 
-⚠️ **"Otomatik onaylanır, ekstra işlem gerekmez" DOĞRU DEĞİL.**
+⚠️ **"It is approved automatically, no extra work needed" is NOT TRUE.**
 
-Yeni kullanıcı `NEEDS_INFO` durumundadır. **Herhangi bir** `PUT` — boş JSON
-bile — onu `ACCEPTED` yapar. PUT atmazsan off-ramp payout'u anchor'ın atadığı
-**deterministik sandbox IBAN'ına** gider, senin istediğin IBAN'a değil.
+A new user is in the `NEEDS_INFO` state. **Any** `PUT` — even an empty JSON body —
+moves them to `ACCEPTED`. Without a PUT, the off-ramp payout goes to the
+**deterministic sandbox IBAN** the anchor assigns, not the IBAN you wanted.
 
 ```js
-// Türk IBAN'ı gönderilirse mod-97 doğrulanır ve payout'ta KULLANILIR
+// A Turkish IBAN, if sent, is mod-97 validated and IS USED at payout time
 await fetch('https://tr-mock-anchor.fly.dev/sep12/customer', {
   method: 'PUT',
   headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
   body: JSON.stringify({ bank_account_number: 'TR320010009999901234567890' }),
 });
 
-// Durum kontrolü
+// Check the status
 const customer = await fetch('https://tr-mock-anchor.fly.dev/sep12/customer', {
   headers: { Authorization: `Bearer ${token}` },
 }).then(r => r.json());
-// customer.status: "NEEDS_INFO" → PUT sonrası "ACCEPTED"
+// customer.status: "NEEDS_INFO" → "ACCEPTED" after the PUT
 ```
 
-`GET /sep12/customer` kaydedilen IBAN'ı **geri yansıtmaz**. Doğrulamak
-istiyorsan off-ramp işleminin `to` alanına bak.
+`GET /sep12/customer` does **not reflect back** the saved IBAN. To verify it, look
+at the `to` field of the off-ramp transaction.
 
-Kimlik numarası, doğum tarihi ve belgeler alındıkları anda atılır, saklanmaz.
+ID numbers, dates of birth and documents are discarded the moment they arrive; they
+are not stored.
 
 ### 4. SEP-6 Info
 
@@ -167,7 +170,7 @@ const info = await fetch('https://tr-mock-anchor.fly.dev/sep6/info').then(r => r
 const params = new URLSearchParams({
   asset_code: 'USDC',
   account: publicKey,
-  funding_method: 'bank_account',   // `type=` deprecated, bunu kullan
+  funding_method: 'bank_account',   // `type=` is deprecated, use this
   amount: '1000',                    // TRY
 });
 const deposit = await fetch(
@@ -175,38 +178,38 @@ const deposit = await fetch(
   { headers: { Authorization: `Bearer ${token}` } }
 ).then(r => r.json());
 
-// Banka talimatları SEP-9 formatında `instructions` altında:
+// The bank instructions are under `instructions`, in SEP-9 format:
 deposit.instructions.bank_name.value              // "TR Mock Bank A.Ş."
-deposit.instructions.bank_account_number.value    // anchor'ın IBAN'ı
-deposit.instructions.external_transfer_memo.value // açıklamaya yazılacak referans
-deposit.more_info_url                             // insan sayfası + simülasyon düğmesi
+deposit.instructions.bank_account_number.value    // the anchor's IBAN
+deposit.instructions.external_transfer_memo.value // the reference for the transfer
+deposit.more_info_url                             // a human page with a simulate button
 
-// Banka transferini simüle et — SADECE mock'ta. Auth gerekmez.
+// Simulate the bank transfer — MOCK ONLY. No auth required.
 await fetch(
   `https://tr-mock-anchor.fly.dev/sep6/tx/${deposit.id}/simulate-bank-transfer`,
   { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ amount: '1000' }) }
 );
 
-// Durum
+// Status
 const { transaction } = await fetch(
   `https://tr-mock-anchor.fly.dev/sep6/transaction?id=${deposit.id}`,
   { headers: { Authorization: `Bearer ${token}` } }
 ).then(r => r.json());
 ```
 
-**Deposit durumları:**
+**Deposit statuses:**
 
-| Durum | Anlamı |
+| Status | Meaning |
 |---|---|
-| `pending_user_transfer_start` | Banka transferi bekleniyor (simüle et) |
-| `pending_anchor` | TRY alındı, USDC ödeniyor |
-| `pending_trust` | **Hedefte USDC trustline yok** — açılınca otomatik ödenir |
-| `pending_stellar` | Gönderim yeniden deneniyor |
-| `completed` | USDC gönderildi, `stellar_transaction_id` dolu |
-| `error` | Kalıcı hata, TRY iade |
+| `pending_user_transfer_start` | Waiting for the bank transfer (simulate it) |
+| `pending_anchor` | TRY received, USDC being paid out |
+| `pending_trust` | **The destination has no USDC trustline** — paid automatically once it is opened |
+| `pending_stellar` | The send is being retried |
+| `completed` | USDC sent, `stellar_transaction_id` is populated |
+| `error` | Permanent failure, the TRY is refunded |
 
-`pending_reason: "treasury_low"` görürsen bekle, kendiliğinden çözülür.
+If you see `pending_reason: "treasury_low"`, wait — it resolves on its own.
 
 ### 6. Withdraw (USDC → TRY)
 
@@ -224,7 +227,7 @@ const withdraw = await fetch(
 ).then(r => r.json());
 // withdraw.account_id (treasury) · withdraw.memo · withdraw.memo_type === "id"
 
-// ⚠️ v14'te `Server` diye bir export YOK — `Horizon.Server` kullan.
+// ⚠️ There is NO `Server` export in v14 — use `Horizon.Server`.
 const server = new Horizon.Server('https://horizon-testnet.stellar.org');
 const USDC = new Asset('USDC', issuerFromHealth);
 
@@ -238,7 +241,7 @@ const paymentTx = new TransactionBuilder(account, {
     asset: USDC,
     amount: '50',
   }))
-  .addMemo(Memo.id(String(withdraw.memo)))   // memo_type "id" ŞART
+  .addMemo(Memo.id(String(withdraw.memo)))   // memo_type "id" is MANDATORY
   .setTimeout(60)
   .build();
 
@@ -246,46 +249,46 @@ paymentTx.sign(keypair);
 await server.submitTransaction(paymentTx);
 ```
 
-Göndermeden önce `withdraw.memo_type === 'id'` olduğunu **doğrula**. Memo'suz
-veya yanlış tipte gönderilen para atfedilemez ve işlem asla tamamlanmaz.
+**Verify** that `withdraw.memo_type === 'id'` before sending. Money sent with no
+memo or the wrong memo type cannot be attributed and the transaction never
+completes.
 
-Off-ramp gelen miktarı çevirir — kısmi/fazla ödemeler de tamamlanır. Sadece
-memo doğru olmak zorundadır.
+The off-ramp converts whatever amount arrives — partial and excess payments also
+complete. Only the memo has to be right.
 
-### 6b. Exchange varyantları — tutar fiat cinsindense
+### 6b. The exchange variants — when the amount is denominated in fiat
 
-`deposit-exchange` / `withdraw-exchange` fiyatlamayı açık yapar ve `quote_id`
-bağlamanı sağlar.
+`deposit-exchange` / `withdraw-exchange` make the pricing explicit and let you bind
+a `quote_id`.
 
-⚠️ **Asset formatı burada farklı.** Zincir üstü bacak **asset koduyla**,
-zincir dışı bacak SEP-38 formatıyla verilir:
+⚠️ **The asset format differs here.** The on-chain leg is given as an **asset
+code**, the off-chain leg in SEP-38 format:
 
 ```
-# DOĞRU
+# CORRECT
 /sep6/withdraw-exchange?source_asset=USDC&destination_asset=iso4217:TRY&amount=5&quote_id=…
 
-# YANLIŞ → 400 "unsupported source_asset 'stellar:USDC:…'; this anchor ramps USDC"
+# WRONG → 400 "unsupported source_asset 'stellar:USDC:…'; this anchor ramps USDC"
 /sep6/withdraw-exchange?source_asset=stellar:USDC:GBBD…&…
 ```
 
-SEP-38 formatı (`stellar:USDC:<issuer>`) **yalnızca `/sep38/*` çağrılarında**
-geçerlidir.
+The SEP-38 format (`stellar:USDC:<issuer>`) is valid **only in `/sep38/*` calls**.
 
 ### 7. SEP-38 Quote
 
 ```js
-// /prices ve /price PUBLIC — auth gerekmez
+// /prices and /price are PUBLIC — no auth needed
 const price = await fetch(
   'https://tr-mock-anchor.fly.dev/sep38/price?' + new URLSearchParams({
     sell_asset: `stellar:USDC:${issuer}`,
     buy_asset: 'iso4217:TRY',
-    buy_amount: '1500',       // sell_amount veya buy_amount
+    buy_amount: '1500',       // either sell_amount or buy_amount
     context: 'sep6',
   })
 ).then(r => r.json());
-// price.sell_amount → bu kadar USDC gerekiyor
+// price.sell_amount → this much USDC is required
 
-// Firm quote — JWT gerekir, tek kullanımlık, varsayılan 15 dk (expire_after ile 1 saate kadar)
+// A firm quote — needs a JWT, single-use, 15 minutes by default (up to an hour with expire_after)
 const quote = await fetch('https://tr-mock-anchor.fly.dev/sep38/quote', {
   method: 'POST',
   headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -296,31 +299,32 @@ const quote = await fetch('https://tr-mock-anchor.fly.dev/sep38/quote', {
     context: 'sep6',
   }),
 }).then(r => r.json());
-// quote.id → deposit/withdraw'da quote_id olarak geçir
+// quote.id → pass it as quote_id on the deposit/withdrawal
 ```
 
-**Kurgu önerisi:** kullanıcıya talep anında **gösterge** fiyat göster
-(`/price`, auth'suz), işlem anında **firm** quote al (`POST /quote`).
-Off-ramp kuru 30 dakika kilitli, sonra yeniden fiyatlanır.
+**Suggested design:** show the user an **indicative** price when they make the
+request (`/price`, no auth), and take a **firm** quote at transaction time
+(`POST /quote`). The off-ramp rate is locked for 30 minutes, then repriced.
 
-### 8. İşlem geçmişi
+### 8. Transaction history
 
 ```js
-// Tüm işlemler — kind=deposit|withdrawal, limit, no_older_than, paging_id
+// All transactions — kind=deposit|withdrawal, limit, no_older_than, paging_id
 fetch('https://tr-mock-anchor.fly.dev/sep6/transactions?asset_code=USDC',
   { headers: { Authorization: `Bearer ${token}` } });
 
-// Tek işlem — id, stellar_transaction_id veya external_transaction_id ile
+// A single transaction — by id, stellar_transaction_id or external_transaction_id
 fetch(`https://tr-mock-anchor.fly.dev/sep6/transaction?id=${txId}`,
   { headers: { Authorization: `Bearer ${token}` } });
 ```
 
-### 9. on_change_callback — polling yerine push
+### 9. on_change_callback — push instead of polling
 
-`deposit`/`withdraw` çağrısına `on_change_callback=https://…` ekle; anchor her
-durum değişiminde `{"transaction": …}` POST eder.
+Add `on_change_callback=https://…` to the `deposit`/`withdraw` call and the anchor
+POSTs `{"transaction": …}` on every status change.
 
-**İmzayı doğrulamadan hiçbir şey yazma** — yoksa herkes durum uydurabilir:
+**Write nothing before verifying the signature** — otherwise anyone can make up a
+status:
 
 ```js
 import { Keypair } from '@stellar/stellar-sdk';
@@ -332,14 +336,14 @@ const ok = Keypair.fromPublicKey(SIGNING_KEY).verify(
 );
 ```
 
-Localhost'ta anchor sana ulaşamaz. **Polling'i yedek tut** (on-ramp 3 sn,
-off-ramp tespiti 5 sn kadence'ında çalışıyor).
+On localhost the anchor cannot reach you. **Keep polling as a fallback** (the
+on-ramp runs on a 3 s cadence, off-ramp detection on 5 s).
 
-## USDC Trustline
+## The USDC trustline
 
-Kullanıcı USDC alabilmek için trustline açmalı; yoksa deposit `pending_trust`
-durumunda bekler. Trustline açılır açılmaz anchor **kendiliğinden** öder,
-ayrıca bir şey çağırmana gerek yoktur.
+A user must open a trustline to receive USDC; without one the deposit waits in
+`pending_trust`. As soon as the trustline is opened the anchor pays **by itself** —
+you do not have to call anything else.
 
 ```js
 import { Horizon, TransactionBuilder, Networks, Operation, Asset, Keypair, BASE_FEE }
@@ -360,81 +364,82 @@ tx.sign(Keypair.fromSecret(SECRET_KEY));
 await server.submitTransaction(tx);
 ```
 
-Trustline başına **0.5 XLM** rezerv gerekir; yetmezse Horizon
-`tx_insufficient_balance` döner.
+Each trustline needs a **0.5 XLM** reserve; without it Horizon returns
+`tx_insufficient_balance`.
 
-## Testnet Hesap Fonlama
+## Funding testnet accounts
 
 ```js
 await fetch(`https://friendbot.stellar.org?addr=${publicKey}`);   // XLM
 ```
 
-**USDC için Circle faucet'e gerek yok.** Anchor'ın kendi on-ramp'i gerçek
-testnet USDC veriyor: SEP-10 → SEP-12 PUT → SEP-6 deposit →
-`simulate-bank-transfer` → `completed`. Faucet (20 USDC / adres / 2 saat)
-yalnızca yedek.
+**No Circle faucet is needed for USDC.** The anchor's own on-ramp hands out real
+testnet USDC: SEP-10 → SEP-12 PUT → SEP-6 deposit → `simulate-bank-transfer` →
+`completed`. The faucet (20 USDC per address per 2 hours) is only a fallback.
 
-## Yaygın Hatalar
+## Common errors
 
-| Hata | Sebep | Çözüm |
+| Error | Cause | Fix |
 |---|---|---|
-| `Server is not a constructor` | v14'te `Server` export'u yok | `Horizon.Server` kullan |
-| `StellarTomlResolver is undefined` | v14'te adı değişti | `StellarToml.Resolver.resolve()` |
-| 401 / 403 | JWT dolmuş veya yok | SEP-10'u tekrarla, otomatik yenileme yaz |
-| `pending_trust` takıldı | Hedefte USDC trustline yok | `changeTrust` — gerisini anchor halleder |
-| Deposit gelmiyor | Banka transferi simüle edilmedi | `POST /sep6/tx/{id}/simulate-bank-transfer` |
-| `pending_reason: treasury_low` | Treasury düşük | Kendiliğinden çözülür, bekle |
-| Withdraw tamamlanmıyor | Memo eksik veya yanlış tip | `Memo.id(String(memo))`, `memo_type: "id"` |
-| **TRY yanlış IBAN'a gitti** | memo kapsamı yok veya SEP-12 PUT atılmadı | Bölüm 2b + 3 |
-| `unsupported source_asset` | Exchange'te SEP-38 formatı kullanıldı | `source_asset=USDC` (kod) |
-| "Unsupported asset_code" | Yanlış asset kodu | `USDC` (büyük harf) |
-| Limit hatası | Hardcode edilmiş tavan | `/health`'ten oku, `null` olabilir |
+| `Server is not a constructor` | There is no `Server` export in v14 | Use `Horizon.Server` |
+| `StellarTomlResolver is undefined` | It was renamed in v14 | `StellarToml.Resolver.resolve()` |
+| 401 / 403 | The JWT expired or is missing | Redo SEP-10, write automatic renewal |
+| Stuck in `pending_trust` | The destination has no USDC trustline | `changeTrust` — the anchor handles the rest |
+| The deposit never arrives | The bank transfer was not simulated | `POST /sep6/tx/{id}/simulate-bank-transfer` |
+| `pending_reason: treasury_low` | The treasury is low | It resolves on its own, wait |
+| The withdrawal never completes | The memo is missing or the wrong type | `Memo.id(String(memo))`, `memo_type: "id"` |
+| **The TRY went to the wrong IBAN** | No memo scope, or no SEP-12 PUT was made | Sections 2b and 3 |
+| `unsupported source_asset` | The SEP-38 format was used on an exchange call | `source_asset=USDC` (the code) |
+| "Unsupported asset_code" | Wrong asset code | `USDC` (uppercase) |
+| A limit error | A hardcoded ceiling | Read it from `/health`, it can be `null` |
 
-## Önemli Notlar
+## Important notes
 
-- Mock Anchor **sadece testnet**'te çalışır.
-- KYC simüledir ama **kendiliğinden olmaz** — en az bir `PUT /sep12/customer`
-  gerekir. IBAN'ı oraya göndermezsen payout sandbox IBAN'ına gider.
-- `simulate-bank-transfer` **mock'a özeldir**; gerçek anchor'da gerçek banka
-  transferi bu işi yapar, sen tetiklemezsin, gözlemlersin.
-- Trustline'sız hesaba deposit **claimable balance oluşturmaz**, `pending_trust`'ta
-  bekler. (`/sep6/info` `features.claimable_balances: true` ilan eder; o yol
-  muhtemelen hiç açılmamış hesaplar için — fonlanmış-ama-trustline'sız senaryoda
-  ölçülen davranış `pending_trust`'tır.)
-- Secret key'i **asla** frontend'e koyma. `.env`, git'e commit etme.
-- Tüm hata response'ları `{"error": "..."}` formatındadır.
-- Bir Soroban contract'ı SEP akışını **kendi başına yürütemez**: keypair'i
-  yoktur, SEP-10 challenge imzalayamaz, HTTP isteği atamaz. Fiat bacağı için
-  zincir dışı bir imzalayıcı (relayer) gerekir.
+- The Mock Anchor works on **testnet only**.
+- KYC is simulated but **does not happen by itself** — at least one
+  `PUT /sep12/customer` is required. Without sending the IBAN there, the payout goes
+  to the sandbox IBAN.
+- `simulate-bank-transfer` is **mock-specific**; with a real anchor an actual bank
+  transfer does that job, which you observe rather than trigger.
+- A deposit to an account without a trustline **does not create a claimable
+  balance**, it waits in `pending_trust`. (`/sep6/info` advertises
+  `features.claimable_balances: true`; that path is probably for accounts that were
+  never created — in the funded-but-trustline-less scenario the measured behaviour
+  is `pending_trust`.)
+- **Never** put a secret key in the frontend. Do not commit `.env` to git.
+- Every error response is in the `{"error": "..."}` format.
+- A Soroban contract **cannot run the SEP flow by itself**: it has no keypair, it
+  cannot sign a SEP-10 challenge, and it cannot make an HTTP request. The fiat leg
+  needs an off-chain signer (a relayer).
 
-## Asset Format (SEP-38)
+## Asset format (SEP-38)
 
 ```
 Fiat:    iso4217:TRY
 Stellar: stellar:USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
 ```
 
-Bu format `/sep38/*` içindir. SEP-6 exchange varyantlarında zincir üstü bacak
-**asset koduyla** verilir (bölüm 6b).
+This format is for `/sep38/*`. In the SEP-6 exchange variants the on-chain leg is
+given as an **asset code** (section 6b).
 
-## Uyumluluk testi
+## Compliance testing
 
 ```bash
-# ⚠️ Paket adı `@stellar/anchor-tests` — `stellar-anchor-tests` 404 verir.
+# ⚠️ The package is `@stellar/anchor-tests` — `stellar-anchor-tests` returns 404.
 npx @stellar/anchor-tests --home-domain https://tr-mock-anchor.fly.dev \
   --seps 1 10 12 6 38 --asset-code USDC --sep-config anchor-tests.config.json
 ```
 
-`sep-config` şeması paketin kendi `lib/schemas/config.js` dosyasında.
-Dikkat: SEP-10 bölümü **yoktur**, `12.customers` en az 4 kayıt ister,
-`createCustomer`/`deleteCustomer` **string**'dir (müşteri adı),
-`sameAccountDifferentMemos` iki müşteri adından oluşan bir dizidir,
-`38` yalnızca `contexts` alır.
+The `sep-config` schema lives in the package's own `lib/schemas/config.js`. Note
+that there is **no** SEP-10 section, `12.customers` wants at least 4 records,
+`createCustomer`/`deleteCustomer` are **strings** (customer names),
+`sameAccountDifferentMemos` is an array of two customer names, and `38` takes only
+`contexts`.
 
-## Faydalı Linkler
+## Useful links
 
 - Mock Anchor: https://tr-mock-anchor.fly.dev
-- SEP Demo (interaktif): https://tr-mock-anchor.fly.dev/explorer
+- SEP Demo (interactive): https://tr-mock-anchor.fly.dev/explorer
 - Guide: https://tr-mock-anchor.fly.dev/guide
 - Health: https://tr-mock-anchor.fly.dev/health
 - Stellar Lab: https://lab.stellar.org

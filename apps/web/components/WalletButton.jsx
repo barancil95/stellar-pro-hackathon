@@ -18,7 +18,7 @@ export default function WalletButton({ wallet, onChange }) {
       resetClientCache();
       onChange(await connect());
     } catch (e) {
-      if (!/iptal/.test(e.message)) onChange(null, e.message);
+      if (!/cancelled/i.test(e.message)) onChange(null, e.message);
     }
   }
 
@@ -59,7 +59,7 @@ export default function WalletButton({ wallet, onChange }) {
             resetClientCache();
             onChange(null);
           }}
-          title="Bağlantıyı kes"
+          title="Disconnect"
           className="rounded-lg border border-edge p-2.5 text-muted transition hover:text-white"
         >
           <LogOut size={16} />
@@ -75,7 +75,7 @@ export default function WalletButton({ wallet, onChange }) {
         className="inline-flex items-center gap-2 rounded-lg bg-signal px-4 py-2.5 text-sm font-semibold text-ink transition hover:brightness-110"
       >
         <Wallet size={16} />
-        Cüzdan bağla
+        Connect wallet
       </button>
       {demoAccounts.length > 0 && (
         <DemoPicker
@@ -90,8 +90,8 @@ export default function WalletButton({ wallet, onChange }) {
 }
 
 /**
- * Eklenti gerektirmeyen demo yolu. Yalnızca sunucuda DEMO_MODE=true iken
- * hesap listesi geldiği için üretimde bu düğme hiç görünmez.
+ * The demo path that needs no extension. The account list only arrives while the
+ * server has DEMO_MODE=true, so this button never appears in production.
  */
 function DemoPicker({ accounts, current, open, setOpen, onPick, compact }) {
   return (
@@ -99,10 +99,10 @@ function DemoPicker({ accounts, current, open, setOpen, onPick, compact }) {
       <button
         onClick={() => setOpen(!open)}
         className="inline-flex items-center gap-1.5 rounded-lg border border-signal/40 px-3 py-2.5 text-sm text-signal transition hover:bg-signal/10"
-        title="Eklenti olmadan testnet hesabı seç"
+        title="Pick a testnet account without an extension"
       >
         <FlaskConical size={15} />
-        {!compact && 'Demo hesap'}
+        {!compact && 'Demo account'}
         <ChevronDown size={13} />
       </button>
 
@@ -111,7 +111,7 @@ function DemoPicker({ accounts, current, open, setOpen, onPick, compact }) {
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute right-0 z-50 mt-2 w-60 overflow-hidden rounded-xl border border-edge bg-surface shadow-xl">
             <p className="border-b border-edge px-3 py-2 text-xs text-muted">
-              Testnet demo — eklenti gerekmez
+              Testnet demo — no extension needed
             </p>
             {accounts.map((a) => (
               <button
@@ -124,7 +124,7 @@ function DemoPicker({ accounts, current, open, setOpen, onPick, compact }) {
                 <span className="text-sm">
                   {a.label}
                   {a.address === current && (
-                    <span className="ml-2 text-xs text-verified">bağlı</span>
+                    <span className="ml-2 text-xs text-verified">connected</span>
                   )}
                 </span>
                 <span className="font-mono text-[10px] text-muted">
@@ -143,8 +143,9 @@ export function TestnetHint() {
   return (
     <p className="mt-3 flex items-start gap-2 text-xs text-muted">
       <AlertTriangle size={14} className="mt-px shrink-0 text-signal" />
-      Cüzdan eklentisi yoksa <b className="text-signal">Demo hesap</b> ile devam
-      edebilirsiniz — Freighter kullanacaksanız Testnet'e almayı unutmayın.
+      Without a wallet extension you can continue with a{' '}
+      <b className="text-signal">Demo account</b> — if you use Freighter, remember to
+      switch it to Testnet.
     </p>
   );
 }

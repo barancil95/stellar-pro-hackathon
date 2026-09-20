@@ -1,15 +1,16 @@
 'use client';
 
 /**
- * İhtiyaç kanıtı → zincire giden 32 baytlık hash.
+ * Proof of need → the 32-byte hash that goes on-chain.
  *
- * Plan M3 "IPFS → CID → Soroban, plan B client-side SHA-256" diyordu.
- * IPFS_API_KEY olmadığı için plan B asıl yol: dosya tarayıcıda SHA-256'lanır,
- * hash zincire yazılır. Dosyanın kendisi hiçbir yere yüklenmez.
+ * Plan M3 said "IPFS → CID → Soroban, plan B client-side SHA-256". With no
+ * IPFS_API_KEY, plan B is the main path: the file is SHA-256'd in the browser and
+ * the hash is written on-chain. The file itself is uploaded nowhere.
  *
- * Bu, ispat açısından IPFS'ten zayıf değil — zincirdeki taahhüt zaten hash.
- * IPFS'in eklediği şey dosyanın *bulunabilirliği*; onu roadmap'e bırakıyoruz.
- * Kullanıcı dosyayı saklar, denetçi aynı dosyayı hash'leyip karşılaştırır.
+ * In terms of proof this is no weaker than IPFS — the on-chain commitment is a
+ * hash either way. What IPFS adds is the file's *availability*; we leave that to
+ * the roadmap. The user keeps the file, an auditor hashes the same file and
+ * compares.
  */
 
 export async function hashEvidence(file) {
@@ -23,15 +24,15 @@ export async function hashEvidence(file) {
     fileName: file.name,
     fileSize: file.size,
     fileType: file.type,
-    /// Önizleme için — yalnızca tarayıcıda, sunucuya gitmez.
+    /// For the preview — browser-only, never sent to the server.
     previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
   };
 }
 
 /**
- * Kanıt zorunlu değil — sahada fotoğraf çekecek durumda olmayan bir aktör de
- * talep açabilmeli. Contract `proof_hash`'i 32 bayt olarak istiyor, o yüzden
- * "kanıt yok" hâli sıfır hash'tir. Ekranlar bunu hash gibi göstermez.
+ * Proof is not mandatory — an actor who cannot take a photo in the field must
+ * still be able to open a request. The contract wants `proof_hash` as 32 bytes, so
+ * "no proof" is the zero hash. The screens do not render it as a hash.
  */
 export const EMPTY_PROOF_HEX = '0'.repeat(64);
 

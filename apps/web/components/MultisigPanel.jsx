@@ -1,6 +1,6 @@
 'use client';
 
-// Tarayıcıda Buffer global değil — açıkça import ediliyor.
+// Buffer is not a global in the browser — imported explicitly.
 import { Buffer } from 'buffer';
 
 import { useCallback, useEffect, useState } from 'react';
@@ -58,18 +58,18 @@ export default function MultisigPanel({ wallet, refreshKey }) {
   }, [load, refreshKey]);
 
   /**
-   * Anchor'da devam eden bir ödeme varken durumu yokla.
+   * Poll the status while a payout is in flight at the anchor.
    *
-   * Asıl yol `on_change_callback` (Vercel'de anchor bize ulaşır ve kaydı
-   * kendisi günceller); bu, localhost için yedek — orada anchor'ın erişebileceği
-   * bir URL yok. Terminal duruma gelince kendiliğinden duruyor.
+   * The main path is `on_change_callback` (on Vercel the anchor reaches us and
+   * updates the record itself); this is the fallback for localhost, where there is
+   * no URL the anchor can reach. It stops on its own once the status is terminal.
    */
   useEffect(() => {
     const pending = rows?.some(
       (r) => r.payout?.anchorTransactionId && !TERMINAL.has(r.payout.status),
     );
     if (!pending) return;
-    const timer = setTimeout(load, 5000); // off-ramp tespiti 5 sn kadence'ında
+    const timer = setTimeout(load, 5000); // off-ramp detection runs on a 5 s cadence
     return () => clearTimeout(timer);
   }, [rows, load]);
 
@@ -101,9 +101,9 @@ export default function MultisigPanel({ wallet, refreshKey }) {
       });
       await load();
 
-      // Fiat bacağı: relayer anchor üzerinden tedarikçinin IBAN'ına öder.
-      // POST artık `completed` beklemiyor — USDC'yi gönderip dönüyor, çünkü
-      // serverless fonksiyonun süre tavanı off-ramp'in bitmesine yetmiyor.
+      // The fiat leg: the relayer pays the supplier's IBAN through the anchor.
+      // The POST no longer waits for `completed` — it sends the USDC and returns,
+      // because the serverless time ceiling is shorter than the off-ramp.
       const res = await fetch('/api/payout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -111,7 +111,7 @@ export default function MultisigPanel({ wallet, refreshKey }) {
       });
       const payout = await res.json();
       if (!res.ok) throw new Error(payout.error);
-      await load(); // nihai durumu aşağıdaki yoklama getirecek
+      await load(); // the poll below will bring in the final status
     } catch (e) {
       setError(e.message);
     } finally {
@@ -122,7 +122,7 @@ export default function MultisigPanel({ wallet, refreshKey }) {
   if (!rows) {
     return (
       <section className="rounded-2xl border border-edge bg-surface p-6 text-sm text-muted">
-        Talepler okunuyor…
+        Loading requests…
       </section>
     );
   }
@@ -130,7 +130,7 @@ export default function MultisigPanel({ wallet, refreshKey }) {
   if (rows.length === 0) {
     return (
       <section className="rounded-2xl border border-edge bg-surface p-6 text-sm text-muted">
-        Henüz talep yok. "Saha talebi" sekmesinden bir tane açın.
+        No requests yet. Open one from the "Field request" tab.
       </section>
     );
   }
@@ -150,8 +150,8 @@ export default function MultisigPanel({ wallet, refreshKey }) {
         const count = r.approvals.filter((a) => a.approved).length;
         const alreadyVoted = myIndex >= 0 && r.approvals[myIndex]?.approved;
         const canApprove = wallet && myIndex >= 0 && !alreadyVoted && !r.completed;
-        // Contract bakiyeden büyük ödemeyi reddeder (Error #9). Kullanıcıyı
-        // imzalatıp hataya sürmek yerine önden söylüyoruz.
+        // The contract rejects a payout larger than the balance (Error #9). Instead
+        // of making the user sign into an error, we say so up front.
         const shortBy =
           balance !== null && r.amount > balance ? r.amount - balance : null;
         const canRelease = wallet && count >= 2 && !r.completed && !shortBy;
@@ -160,7 +160,7 @@ export default function MultisigPanel({ wallet, refreshKey }) {
           <section key={id} className="rounded-2xl border border-edge bg-surface p-6">
             <header className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
               <h3 className="font-semibold">
-                {r.note?.need || `Talep #${id}`}
+                {r.note?.need || `Request #${id}`}
                 <span className="ml-3 font-mono text-sm text-verified">
                   {fromStroops(r.amount)} USDC
                 </span>
@@ -168,16 +168,16 @@ export default function MultisigPanel({ wallet, refreshKey }) {
               <span className="font-mono text-xs text-muted">
                 #{id} ·{' '}
                 {isEmptyProof(Buffer.from(r.proof_hash).toString('hex'))
-                  ? 'kanıt eklenmedi'
-                  : `kanıt ${shortHash(Buffer.from(r.proof_hash).toString('hex'), 6)}`}
+                  ? 'no proof attached'
+                  : `proof ${shortHash(Buffer.from(r.proof_hash).toString('hex'), 6)}`}
               </span>
             </header>
 
             <div className="mb-4">
               <div className="mb-2 flex items-center justify-between text-xs">
-                <span className="text-muted">Koordinatör onayı</span>
+                <span className="text-muted">Coordinator approval</span>
                 <span className={count >= 2 ? 'text-verified' : 'text-muted'}>
-                  {count}/2 gerekli · {r.approvals.length} koordinatör
+                  {count}/2 required · {r.approvals.length} coordinators
                 </span>
               </div>
               <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-ink">
@@ -200,7 +200,7 @@ export default function MultisigPanel({ wallet, refreshKey }) {
                       {a.approved ? <Check size={12} /> : <CircleDashed size={12} />}
                       {String.fromCharCode(65 + i)}
                       {a.address === wallet?.address && (
-                        <span className="ml-auto text-[10px]">siz</span>
+                        <span className="ml-auto text-[10px]">you</span>
                       )}
                     </div>
                     <div className="mt-0.5 font-mono text-[10px] opacity-60">
@@ -219,12 +219,12 @@ export default function MultisigPanel({ wallet, refreshKey }) {
                   className="inline-flex items-center gap-2 rounded-lg border border-verified/40 px-4 py-2 text-sm font-semibold text-verified transition hover:bg-verified/10 disabled:opacity-40"
                 >
                   {busy === `approve-${id}` && <Loader2 size={14} className="animate-spin" />}
-                  Onayla
+                  Approve
                 </button>
               )}
               {alreadyVoted && !r.completed && (
                 <span className="rounded-lg border border-edge px-4 py-2 text-sm text-muted">
-                  Onayınız kayıtlı
+                  Your approval is recorded
                 </span>
               )}
               {canRelease && (
@@ -238,18 +238,18 @@ export default function MultisigPanel({ wallet, refreshKey }) {
                   ) : (
                     <Landmark size={14} />
                   )}
-                  {busy === `release-${id}` ? 'Ödeniyor…' : 'Fonu serbest bırak'}
+                  {busy === `release-${id}` ? 'Paying…' : 'Release the funds'}
                 </button>
               )}
               {shortBy && count >= 2 && !r.completed && (
                 <span className="text-xs text-signal">
-                  Escrow'da {fromStroops(shortBy)} USDC eksik — ödeme için önce
-                  bağış gerekiyor.
+                  The escrow is {fromStroops(shortBy)} USDC short — a donation is
+                  needed before the payout.
                 </span>
               )}
               {wallet && myIndex < 0 && !r.completed && (
                 <span className="text-xs text-muted">
-                  Bu cüzdan koordinatör listesinde değil — onaylayamaz.
+                  This wallet is not on the coordinator list — it cannot approve.
                 </span>
               )}
             </div>

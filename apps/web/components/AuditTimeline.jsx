@@ -1,6 +1,6 @@
 'use client';
 
-// Tarayıcıda Buffer global değil — açıkça import ediliyor.
+// Buffer is not a global in the browser — imported explicitly.
 import { Buffer } from 'buffer';
 
 import { Check, ArrowUpRight } from 'lucide-react';
@@ -8,10 +8,10 @@ import { fromStroops, explorerTx } from '../lib/soroban.js';
 import { shortHash, isEmptyProof } from '../lib/evidence.js';
 
 /**
- * Talep anında gösterge quote, ödeme anında firm quote alınıyor (plan 5.5).
- * Arada kur oynarsa tedarikçiye ulaşan TRY talep edilenden farklı olur —
- * denetim izinin bunu göstermesi gerekir, yoksa "para nereye gitti" sorusunun
- * cevabı eksik kalır.
+ * An indicative quote is taken at request time and a firm quote at payout time
+ * (plan 5.5). If the rate moves in between, the TRY reaching the supplier differs
+ * from what was requested — the audit trail has to show that, otherwise the answer
+ * to "where did the money go" is incomplete.
  */
 function driftOf(requestedTry, tryPaid) {
   const requested = Number(requestedTry);
@@ -19,7 +19,7 @@ function driftOf(requestedTry, tryPaid) {
   if (!(requested > 0) || !(paid > 0)) return null;
 
   const delta = paid - requested;
-  if (Math.abs(delta) < 0.005) return null; // kuruş altı — gürültü
+  if (Math.abs(delta) < 0.005) return null; // sub-cent — noise
   return {
     requested: requested.toFixed(2),
     delta: `${delta > 0 ? '+' : ''}${delta.toFixed(2)}`,
@@ -29,8 +29,8 @@ function driftOf(requestedTry, tryPaid) {
 }
 
 /**
- * "Para nereye gitti?" — zincirdeki ve anchor'daki gerçek duruma bakar,
- * uydurma adım yok. Tamamlanmamış adım soluk gösterilir.
+ * "Where did the money go?" — it reads the real state on-chain and at the anchor,
+ * with no invented steps. An unfinished step is dimmed.
  */
 export default function AuditTimeline({ request, approvalCount, payout, note }) {
   const proofHex = Buffer.from(request.proof_hash).toString('hex');
@@ -38,46 +38,46 @@ export default function AuditTimeline({ request, approvalCount, payout, note }) 
 
   const steps = [
     {
-      label: 'Kanıt',
-      // Kanıt opsiyonel; sıfır hash'i sha256'ymış gibi göstermek yanıltıcı olur.
-      detail: isEmptyProof(proofHex) ? 'eklenmedi' : `sha256 ${shortHash(proofHex, 6)}`,
+      label: 'Proof',
+      // Proof is optional; rendering the zero hash as if it were a sha256 would mislead.
+      detail: isEmptyProof(proofHex) ? 'not attached' : `sha256 ${shortHash(proofHex, 6)}`,
       done: !isEmptyProof(proofHex),
     },
     {
-      label: 'Talep',
-      detail: `#${request.id} · ${fromStroops(request.amount)} USDC · tedarikçi ${
+      label: 'Request',
+      detail: `#${request.id} · ${fromStroops(request.amount)} USDC · supplier ${
         note?.supplierName || payout?.supplierName || shortHash(supplierHex, 4)
       }`,
       done: true,
     },
     {
-      label: 'Onaylar',
-      detail: `${approvalCount}/2 koordinatör`,
+      label: 'Approvals',
+      detail: `${approvalCount}/2 coordinators`,
       done: approvalCount >= 2,
     },
     {
-      label: 'Fon serbest',
-      detail: request.completed ? 'escrow → relayer' : 'bekliyor',
+      label: 'Funds released',
+      detail: request.completed ? 'escrow → relayer' : 'pending',
       done: request.completed,
     },
     {
       label: 'Anchor',
       detail: payout?.anchorTransactionId
         ? `${payout.anchorTransactionId} · memo ${payout.memo}`
-        : 'bekliyor',
+        : 'pending',
       done: Boolean(payout?.anchorTransactionId),
       href: payout?.stellarTxHash ? explorerTx(payout.stellarTxHash) : null,
     },
     {
-      label: 'TRY ödendi',
+      label: 'TRY paid',
       detail: payout?.bankReference
-        ? `${payout.tryPaid} TRY · banka ref ${payout.bankReference}`
+        ? `${payout.tryPaid} TRY · bank ref ${payout.bankReference}`
         : payout?.status && payout.status !== 'completed'
           ? `anchor: ${payout.status}`
-          : 'bekliyor',
+          : 'pending',
       done: Boolean(payout?.bankReference),
-      // Talep anındaki kur ile ödeme anındaki kur aynı olmak zorunda değil.
-      // Sapmayı gizlemek yerine gösteriyoruz.
+      // The rate at request time need not equal the rate at payout time. Rather than
+      // hiding the drift, we show it.
       drift: driftOf(note?.requestedTry, payout?.tryPaid),
     },
   ];
@@ -85,7 +85,7 @@ export default function AuditTimeline({ request, approvalCount, payout, note }) 
   return (
     <div className="mt-6 border-t border-edge pt-5">
       <h4 className="mb-4 text-xs font-semibold uppercase tracking-wider text-muted">
-        Denetim izi
+        Audit trail
       </h4>
       <ol className="space-y-0">
         {steps.map((s, i) => (
@@ -118,7 +118,7 @@ export default function AuditTimeline({ request, approvalCount, payout, note }) 
               </div>
               {s.drift && (
                 <div className="font-mono text-xs text-muted">
-                  talep {s.drift.requested} TRY → fark{' '}
+                  requested {s.drift.requested} TRY → drift{' '}
                   <span className={s.drift.negative ? 'text-signal' : 'text-verified'}>
                     {s.drift.delta} TRY ({s.drift.pct})
                   </span>

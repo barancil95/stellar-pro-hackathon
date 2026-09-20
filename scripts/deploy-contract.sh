@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# Contract'ı testnet'e deploy edip initialize eder, POA_CONTRACT_ID'yi .env'e yazar.
+# Deploys the contract to testnet, initializes it and writes POA_CONTRACT_ID to .env.
 #
-# Not: plan 7'de `deploy-contract.js` diyordu; stellar CLI orkestrasyonu için
-# shell daha az sürtünmeli olduğu için .sh yazıldı.
+# Note: plan 7 called for `deploy-contract.js`; this is a .sh because shell has less
+# friction for orchestrating the stellar CLI.
 #
-# Ön koşul: `stellar keys generate` ile admin/relayer/coord-a/b/c mevcut.
+# Prerequisite: admin/relayer/coord-a/b/c exist via `stellar keys generate`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# rustup brew'da keg-only.
+# rustup is keg-only in brew.
 export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
 
 # shellcheck disable=SC1091
 set -a; source .env; set +a
 
-# --network testnet alias'ı bazı alt komutlarda passphrase'i taşımıyor,
-# bu yüzden ikisi de açıkça geçiliyor.
+# The --network testnet alias does not carry the passphrase into some subcommands,
+# so both are passed explicitly.
 NET=(--rpc-url "$SOROBAN_RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE")
 
 echo "→ build"
@@ -27,16 +27,16 @@ CONTRACT_ID=$(stellar contract deploy \
   --source admin "${NET[@]}" 2>/dev/null | tail -1)
 echo "   $CONTRACT_ID"
 
-# Option<Address>: None → `null`, Some → JSON string olarak adres.
-# `--vault C...` (tırnaksız) ve `{"Some":…}` formlarının ikisi de CLI'da
-# reddediliyor — ölçüldü.
+# Option<Address>: None → `null`, Some → the address as a JSON string.
+# Both `--vault C...` (unquoted) and the `{"Some":…}` form are rejected by the CLI
+# — measured.
 if [ -n "${VAULT_ADDRESS:-}" ]; then
   VAULT_ARG="\"$VAULT_ADDRESS\""
-  echo "→ initialize (vault: $VAULT_ADDRESS — fon DeFindex vault'unda duracak)"
+  echo "→ initialize (vault: $VAULT_ADDRESS — funds will sit in the DeFindex vault)"
 else
   VAULT_ARG=null
-  echo "→ initialize (vault: null — fon escrow'da duracak)"
-  echo "   vault istiyorsanız önce: ./scripts/create-vault.sh"
+  echo "→ initialize (vault: null — funds will sit in the escrow)"
+  echo "   if you want a vault, run this first: ./scripts/create-vault.sh"
 fi
 
 stellar contract invoke --id "$CONTRACT_ID" --source admin "${NET[@]}" -- initialize \
@@ -49,6 +49,6 @@ stellar contract invoke --id "$CONTRACT_ID" --source admin "${NET[@]}" -- initia
   --vault      "$VAULT_ARG" >/dev/null
 
 sed -i '' "s|^POA_CONTRACT_ID=.*|POA_CONTRACT_ID=$CONTRACT_ID|" .env
-echo "✅ .env güncellendi: POA_CONTRACT_ID=$CONTRACT_ID"
+echo "✅ .env updated: POA_CONTRACT_ID=$CONTRACT_ID"
 
 stellar contract invoke --id "$CONTRACT_ID" --source admin "${NET[@]}" -- get_config

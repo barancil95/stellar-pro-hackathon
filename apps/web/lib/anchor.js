@@ -1,10 +1,10 @@
 /**
- * TR Mock Anchor istemcisi — SEP-1/10/12/38/6.
+ * TR Mock Anchor client — SEP-1/10/12/38/6.
  *
- * Elle yazıldı: @stellar/typescript-wallet-sdk tarayıcı için bundle'lanmış
- * (stellar-sdk 13.0.0-beta.1'e pinli) ve Node'da import edilemiyor.
+ * Hand-written: @stellar/typescript-wallet-sdk is bundled for the browser (pinned
+ * to stellar-sdk 13.0.0-beta.1) and cannot be imported on Node.
  *
- * Hiçbir endpoint hardcode edilmez — hepsi /health'ten okunur.
+ * No endpoint is hardcoded — they are all read from /health.
  */
 
 import { TransactionBuilder } from '@stellar/stellar-sdk';
@@ -17,7 +17,7 @@ const BASE = `https://${HOME_DOMAIN}`;
 
 let healthCache = null;
 
-/** /health — issuer, endpoint'ler, treasury, kurlar, limitler. */
+/** /health — issuer, endpoints, treasury, rates, limits. */
 export async function health({ fresh = false } = {}) {
   if (healthCache && !fresh) return healthCache;
   healthCache = await request(`${BASE}/health`);
@@ -47,9 +47,9 @@ async function request(url, options = {}) {
 const authHeader = (token) => ({ Authorization: `Bearer ${token}` });
 
 /**
- * İmzalayan taraf iki şekilde gelebilir: sunucuda/script'te bir `Keypair`,
- * tarayıcıda ise cüzdan — `{ publicKey, signTransaction }` (Wallets Kit ya da
- * demo imzalayıcı). SEP-10 challenge'ı ikisiyle de imzalanabilsin diye.
+ * The signer arrives in one of two shapes: a `Keypair` on the server or in a
+ * script, and a wallet in the browser — `{ publicKey, signTransaction }` (Wallets
+ * Kit or the demo signer). This lets the SEP-10 challenge be signed by either.
  */
 const addressOf = (signer) =>
   typeof signer.publicKey === 'function' ? signer.publicKey() : signer.publicKey;
@@ -65,9 +65,10 @@ async function signChallenge(signer, xdr, networkPassphrase) {
 }
 
 /**
- * SEP-10. `memo` verilirse JWT'nin sub'ı "G…:memo" olur — aynı Stellar hesabı
- * altında ayrı müşteri kimliği. Tedarikçi başına IBAN kaydı bunun üzerine kurulu
- * (bkz. plan 5.2); memo'suz auth yaparsak TRY relayer'ın IBAN'ına gider.
+ * SEP-10. With a `memo`, the JWT's sub becomes "G…:memo" — a separate customer
+ * identity under the same Stellar account. The per-supplier IBAN record is built
+ * on this (see plan 5.2); authenticating without a memo sends the TRY to the
+ * relayer's IBAN.
  */
 export async function sep10Authenticate(signer, { memo, clientDomain } = {}) {
   const h = await health();
@@ -92,8 +93,8 @@ export async function sep10Authenticate(signer, { memo, clientDomain } = {}) {
 }
 
 /**
- * JWT süresi dolmuşsa (401/403) bir kez yeniden auth edip tekrar dener.
- * Plan M2: "SEP-10 auth, 401'de otomatik yenileme".
+ * If the JWT has expired (401/403), re-authenticates once and retries.
+ * Plan M2: "SEP-10 auth, automatic renewal on 401".
  */
 export function makeSession(signer, { memo } = {}) {
   let token = null;
@@ -119,19 +120,19 @@ export function makeSession(signer, { memo } = {}) {
   };
 }
 
-/* -------------------------------- limitler ------------------------------- */
+/* --------------------------------- limits -------------------------------- */
 
 /**
- * `/health`'teki limitler `null` gelebilir — o zaman limit uygulanmıyor demek.
- * Sabit 50/3000 TRY tavanı VARSAYMAYIN (SKILL.md); okunanı uygulayın.
- * Ölçüldüğünde üçü de null'dı, ama sandbox sıfırlanınca değişebilir.
+ * The limits in `/health` can come back `null` — that means no limit is enforced.
+ * Do NOT assume a fixed 50/3000 TRY ceiling (SKILL.md); enforce what you read.
+ * All three were null when measured, but that can change when the sandbox resets.
  */
 export async function assertOfframpAmount(usdcAmount) {
   const { limits } = await health();
   const min = limits?.min_offramp_usdc;
   if (min != null && Number(usdcAmount) < Number(min)) {
     throw new Error(
-      `Off-ramp alt sınırı ${min} USDC — ${usdcAmount} USDC ile withdraw açılamaz`,
+      `The off-ramp minimum is ${min} USDC — a withdrawal cannot be opened with ${usdcAmount} USDC`,
     );
   }
 }
@@ -142,10 +143,10 @@ export async function assertOnrampAmount(tryAmount) {
   const min = limits?.min_onramp_try;
   const max = limits?.max_onramp_try;
   if (min != null && amount < Number(min)) {
-    throw new Error(`On-ramp alt sınırı ${min} TRY — ${tryAmount} TRY kabul edilmez`);
+    throw new Error(`The on-ramp minimum is ${min} TRY — ${tryAmount} TRY is not accepted`);
   }
   if (max != null && amount > Number(max)) {
-    throw new Error(`On-ramp üst sınırı ${max} TRY — ${tryAmount} TRY kabul edilmez`);
+    throw new Error(`The on-ramp maximum is ${max} TRY — ${tryAmount} TRY is not accepted`);
   }
 }
 
@@ -157,9 +158,9 @@ export async function getCustomer(token) {
 }
 
 /**
- * Herhangi bir PUT müşteriyi ACCEPTED yapar. `bank_account_number` Türk IBAN'ı
- * ise mod-97 doğrulanır ve payout'ta kullanılır; gönderilmezse anchor
- * deterministik bir sandbox IBAN'ı atar.
+ * Any PUT moves the customer to ACCEPTED. If `bank_account_number` is a Turkish
+ * IBAN it is mod-97 validated and used at payout time; if it is omitted, the
+ * anchor assigns a deterministic sandbox IBAN.
  */
 export async function putCustomer(token, fields = {}) {
   const h = await health();
@@ -180,7 +181,7 @@ export async function assetIds() {
   };
 }
 
-/** Gösterge fiyat — auth gerektirmez, UI için. */
+/** Indicative price — needs no auth, for the UI. */
 export async function indicativePrice({ sellAsset, buyAsset, sellAmount, buyAmount }) {
   const h = await health();
   const url = new URL(`${h.sep.anchor_quote_server}/price`);
@@ -192,7 +193,7 @@ export async function indicativePrice({ sellAsset, buyAsset, sellAmount, buyAmou
   return request(url.toString());
 }
 
-/** Firm quote — tek kullanımlık, varsayılan 15 dk geçerli. */
+/** Firm quote — single-use, valid for 15 minutes by default. */
 export async function firmQuote(token, { sellAsset, buyAsset, sellAmount, buyAmount }) {
   const h = await health();
   const body = { sell_asset: sellAsset, buy_asset: buyAsset, context: 'sep6' };
@@ -225,8 +226,8 @@ export async function deposit(token, { account, amount, quoteId, onChangeCallbac
 }
 
 /**
- * Off-ramp. Dönen account_id + memo'ya USDC gönderilir; TRY, SEP-12'de kayıtlı
- * IBAN'a ödenir. Memo mutlaka Memo.id olmalı.
+ * Off-ramp. USDC is sent to the returned account_id + memo; the TRY is paid to the
+ * IBAN registered in SEP-12. The memo must be a Memo.id.
  */
 export async function withdraw(token, { amount, quoteId, onChangeCallback }) {
   const h = await health();
@@ -240,13 +241,13 @@ export async function withdraw(token, { amount, quoteId, onChangeCallback }) {
 }
 
 /**
- * Fiyatlamayı açık yapan varyant — talepler TRY cinsinden geldiği için bunu
- * kullanıyoruz.
+ * The variant that makes the pricing explicit — we use it because requests come
+ * in denominated in TRY.
  *
- * ⚠️ `source_asset` **asset kodu** ("USDC"), SEP-38 formatı DEĞİL. SEP-6
- * spec'inde exchange varyantlarında zincir üstü bacak kodla, zincir dışı bacak
- * SEP-38 formatıyla verilir. Plan 5.4 bunu `stellar:USDC:<issuer>` diye
- * yazmıştı; anchor 400 "unsupported source_asset" döndürdü.
+ * ⚠️ `source_asset` is an **asset code** ("USDC"), NOT the SEP-38 format. In the
+ * SEP-6 spec's exchange variants the on-chain leg is given as a code and the
+ * off-chain leg in SEP-38 format. Plan 5.4 had it as `stellar:USDC:<issuer>`; the
+ * anchor returned 400 "unsupported source_asset".
  */
 export async function withdrawExchange(token, { sellAmount, quoteId, onChangeCallback }) {
   const h = await health();
@@ -261,7 +262,7 @@ export async function withdrawExchange(token, { sellAmount, quoteId, onChangeCal
   return request(url.toString(), { headers: authHeader(token) });
 }
 
-/** Sandbox'a özel: gerçekte bu, bankadan gelen TRY transferidir. */
+/** Sandbox-only: in reality this is the incoming TRY transfer from the bank. */
 export async function simulateBankTransfer(txId, amount) {
   const h = await health();
   return request(`${h.sep.transfer_server}/tx/${txId}/simulate-bank-transfer`, {
@@ -282,8 +283,8 @@ export async function getTransaction(token, id) {
 const TERMINAL = new Set(['completed', 'error', 'refunded']);
 
 /**
- * Durum takibi. on_change_callback asıl yol, bu yedek (plan 5.7).
- * On-ramp 3 sn, off-ramp tespiti 5 sn kadence'ında çalışıyor.
+ * Status tracking. on_change_callback is the main path, this is the fallback
+ * (plan 5.7). The on-ramp runs on a 3 s cadence, off-ramp detection on 5 s.
  */
 export async function pollTransaction(session, id, { timeoutMs = 120000, intervalMs = 3000, onUpdate } = {}) {
   const deadline = Date.now() + timeoutMs;
@@ -296,7 +297,7 @@ export async function pollTransaction(session, id, { timeoutMs = 120000, interva
     }
     if (TERMINAL.has(tx.status)) return tx;
     if (Date.now() > deadline) {
-      const err = new Error(`Transaction ${id} ${timeoutMs}ms içinde bitmedi (son durum: ${tx.status})`);
+      const err = new Error(`Transaction ${id} did not settle within ${timeoutMs}ms (last status: ${tx.status})`);
       err.transaction = tx;
       throw err;
     }

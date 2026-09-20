@@ -15,14 +15,14 @@ import { indicativePrice, assetIds } from '../lib/anchor.js';
 import { startOnramp, settleOnramp } from '../lib/onramp.js';
 import { TestnetHint } from './WalletButton.jsx';
 
-/** TL bağışının adımları — ekranda sırayla işaretlenir. */
+/** The steps of a TRY donation — ticked off in order on screen. */
 const ONRAMP_STEPS = [
-  ['auth', 'Anchor kimliği — SEP-10, cüzdanınızla imzalanır'],
+  ['auth', 'Anchor identity — SEP-10, signed with your wallet'],
   ['kyc', 'KYC — SEP-12'],
-  ['deposit', 'Havale talimatı — SEP-6 deposit'],
-  ['bank', 'Banka havalesi — sandbox simülasyonu'],
-  ['settle', 'USDC cüzdanınıza geldi'],
-  ['escrow', "Escrow'a yatırıldı"],
+  ['deposit', 'Transfer instructions — SEP-6 deposit'],
+  ['bank', 'Bank transfer — sandbox simulation'],
+  ['settle', 'USDC arrived in your wallet'],
+  ['escrow', 'Deposited into the escrow'],
 ];
 
 export default function DonorPanel({ wallet, issuer }) {
@@ -59,7 +59,7 @@ export default function DonorPanel({ wallet, issuer }) {
         signTransaction: wallet.sign,
         issuer,
       });
-      setLastTx({ hash, label: 'USDC trustline açıldı' });
+      setLastTx({ hash, label: 'USDC trustline opened' });
       await refresh();
     } catch (e) {
       setError(trustlineHint(e));
@@ -77,7 +77,7 @@ export default function DonorPanel({ wallet, issuer }) {
         signTransaction: wallet.sign,
         amount,
       });
-      setLastTx({ hash, label: 'Bağış zincire yazıldı' });
+      setLastTx({ hash, label: 'Donation written on-chain' });
       await refresh();
     } catch (e) {
       setError(e.message);
@@ -86,7 +86,8 @@ export default function DonorPanel({ wallet, issuer }) {
     }
   }
 
-  // Gösterge kur — TL'nin kaç USDC edeceği. Kesin tutarı anchor deposit'te belirler.
+  // Indicative rate — how much USDC the TRY is worth. The anchor sets the exact
+  // amount at deposit time.
   useEffect(() => {
     let alive = true;
     if (!(Number(tryAmount) > 0)) return setQuote(null);
@@ -109,12 +110,13 @@ export default function DonorPanel({ wallet, issuer }) {
     };
   }, [tryAmount]);
 
-  // Cüzdan değişirse yarım kalan on-ramp başka birinin oturumuyla sürmesin.
+  // If the wallet changes, a half-finished on-ramp must not continue on someone
+  // else's session.
   useEffect(() => setOnramp(null), [wallet?.address]);
 
   const onStep = (step) => setOnramp((o) => ({ ...o, step }));
 
-  /** 1. aşama: anchor'dan havale talimatını al. */
+  /** Stage 1: get the transfer instructions from the anchor. */
   async function handleStartOnramp() {
     setBusy(true);
     setError(null);
@@ -131,7 +133,7 @@ export default function DonorPanel({ wallet, issuer }) {
     }
   }
 
-  /** 2. aşama: havale → USDC cüzdanda → escrow'a. */
+  /** Stage 2: transfer → USDC in the wallet → into the escrow. */
   async function handleSettleOnramp() {
     const { session, deposit: dep, tryAmount: paid, simulated } = onramp;
     setBusy(true);
@@ -157,15 +159,15 @@ export default function DonorPanel({ wallet, issuer }) {
         amount: usdc,
       });
       setOnramp((o) => ({ ...o, step: 'done' }));
-      setLastTx({ hash, label: `${paid} TL → ${usdc} USDC escrow'da` });
+      setLastTx({ hash, label: `${paid} TRY → ${usdc} USDC in the escrow` });
       await refresh();
     } catch (e) {
-      // Havale gitti ama anchor USDC'yi henüz ödemediyse iş yarıda değil, sadece
-      // beklemede: aynı deposit üzerinden yeniden sorulabilir.
+      // If the transfer went out but the anchor has not paid the USDC yet, the job
+      // is not half-done, only pending: the same deposit can be polled again.
       setOnramp((o) => ({ ...o, retry: !usdc }));
       setError(
         usdc
-          ? `${usdc} USDC cüzdanınıza geldi ama escrow'a yatırılamadı: ${e.message}. "USDC ile" sekmesinden yatırabilirsiniz.`
+          ? `${usdc} USDC arrived in your wallet but could not be deposited into the escrow: ${e.message}. You can deposit it from the "With USDC" tab.`
           : e.message,
       );
     } finally {
@@ -180,7 +182,7 @@ export default function DonorPanel({ wallet, issuer }) {
   return (
     <section className="rounded-2xl border border-edge bg-surface p-6">
       <header className="mb-5 flex items-baseline justify-between">
-        <h2 className="text-lg font-semibold">Bağış yap</h2>
+        <h2 className="text-lg font-semibold">Make a donation</h2>
         <a
           href={explorerContract(CONTRACT_ID)}
           target="_blank"
@@ -192,8 +194,8 @@ export default function DonorPanel({ wallet, issuer }) {
       </header>
 
       <div className="mb-4 grid grid-cols-2 gap-3">
-        <Stat label="Escrow bakiyesi" value={escrow ? fromStroops(escrow.balance) : '—'} unit="USDC" accent />
-        <Stat label="Ödenen" value={escrow ? fromStroops(escrow.campaign.disbursed) : '—'} unit="USDC" />
+        <Stat label="Escrow balance" value={escrow ? fromStroops(escrow.balance) : '—'} unit="USDC" accent />
+        <Stat label="Disbursed" value={escrow ? fromStroops(escrow.campaign.disbursed) : '—'} unit="USDC" />
       </div>
 
       {escrow?.vault && <VaultLine escrow={escrow} />}
@@ -201,22 +203,22 @@ export default function DonorPanel({ wallet, issuer }) {
       {!wallet ? (
         <>
           <p className="text-sm text-muted">
-            Bağış yapmak için cüzdanınızı bağlayın. Fon merkezi bir havuzda değil,
-            2/3 çoklu imzayla korunan escrow contract'ında durur.
+            Connect your wallet to donate. The funds are not in a central pool but in
+            an escrow contract protected by a 2-of-3 multisig.
           </p>
           <TestnetHint />
         </>
       ) : (
         <>
           <div className="mb-4 flex items-baseline justify-between text-sm">
-            <span className="text-muted">Cüzdanınızdaki USDC</span>
+            <span className="text-muted">USDC in your wallet</span>
             <span className="font-mono">{position ? position.balance : '…'}</span>
           </div>
 
           <div className="mb-4 grid grid-cols-2 gap-1 rounded-lg border border-edge bg-ink p-1 text-sm">
             {[
-              ['try', 'TL ile'],
-              ['usdc', 'USDC ile'],
+              ['try', 'With TRY'],
+              ['usdc', 'With USDC'],
             ].map(([id, label]) => (
               <button
                 key={id}
@@ -264,7 +266,7 @@ export default function DonorPanel({ wallet, issuer }) {
                 className="inline-flex items-center gap-2 rounded-lg bg-signal px-5 py-2.5 text-sm font-semibold text-ink transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {busy && <Loader2 size={15} className="animate-spin" />}
-                {busy ? 'İmzalanıyor…' : 'Bağışla'}
+                {busy ? 'Signing…' : 'Donate'}
               </button>
             </div>
           )}
@@ -272,9 +274,9 @@ export default function DonorPanel({ wallet, issuer }) {
           {noTrustline && (
             <div className="mt-3 rounded-lg border border-signal/30 bg-signal/5 p-3">
               <p className="text-xs text-signal">
-                Bu cüzdan USDC tutamıyor — trustline yok. Anchor'dan gelen bir
-                deposit de bu yüzden <span className="font-mono">pending_trust</span>'ta
-                beklerdi.
+                This wallet cannot hold USDC — there is no trustline. A deposit from
+                the anchor would wait in{' '}
+                <span className="font-mono">pending_trust</span> for the same reason.
               </p>
               <button
                 onClick={handleTrustline}
@@ -282,12 +284,12 @@ export default function DonorPanel({ wallet, issuer }) {
                 className="mt-2.5 inline-flex items-center gap-2 rounded-lg border border-signal/50 px-3 py-1.5 text-xs font-semibold text-signal transition hover:bg-signal/10 disabled:opacity-40"
               >
                 {busy && <Loader2 size={12} className="animate-spin" />}
-                USDC trustline aç
+                Open a USDC trustline
               </button>
             </div>
           )}
           {mode === 'usdc' && insufficient && !noTrustline && (
-            <p className="mt-3 text-xs text-signal">Cüzdan bakiyesi yetersiz.</p>
+            <p className="mt-3 text-xs text-signal">Insufficient wallet balance.</p>
           )}
         </>
       )}
@@ -316,9 +318,10 @@ export default function DonorPanel({ wallet, issuer }) {
 }
 
 /**
- * TL ile bağış: anchor TL'yi alır, USDC'yi bağışçının cüzdanına gönderir,
- * oradan escrow'a yatırılır. Havale talimatı ekranda gösterilir — gerçek
- * hayatta bağışçı bunu bankasından yapar; sandbox'ta düğme simüle eder.
+ * Donating in TRY: the anchor takes the TRY, sends the USDC to the donor's wallet,
+ * and from there it is deposited into the escrow. The transfer instructions are
+ * shown on screen — in real life the donor makes that transfer at their bank; in
+ * the sandbox a button simulates it.
  */
 function TryDonation({
   tryAmount,
@@ -348,7 +351,7 @@ function TryDonation({
             className="w-full rounded-lg border border-edge bg-ink px-3 py-2.5 pr-12 font-mono text-sm outline-none focus:border-signal disabled:opacity-60"
           />
           <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted">
-            TL
+            TRY
           </span>
         </div>
         <button
@@ -359,7 +362,7 @@ function TryDonation({
           {busy && !onramp?.awaitingTransfer && onramp?.step !== 'done' && (
             <Loader2 size={15} className="animate-spin" />
           )}
-          TL ile bağışla
+          Donate in TRY
         </button>
       </div>
 
@@ -367,11 +370,11 @@ function TryDonation({
         {quote ? (
           <>
             ≈ <span className="font-mono text-white">{Number(quote.buy_amount).toFixed(2)}</span> USDC
-            · kur {Number(quote.price).toFixed(2)} · anchor komisyonu dahil
-            {quote.fee?.total ? ` (${quote.fee.total} TL)` : ''}
+            · rate {Number(quote.price).toFixed(2)} · anchor fee included
+            {quote.fee?.total ? ` (${quote.fee.total} TRY)` : ''}
           </>
         ) : (
-          'Kur yükleniyor…'
+          'Loading rate…'
         )}
       </p>
 
@@ -404,27 +407,27 @@ function TryDonation({
       {onramp?.awaitingTransfer && (
         <div className="mt-3 rounded-xl border border-signal/30 bg-signal/5 p-4 text-xs">
           <p className="mb-2 flex items-center gap-1.5 font-semibold text-signal">
-            <Landmark size={13} /> Havale talimatı — anchor'dan
+            <Landmark size={13} /> Transfer instructions — from the anchor
           </p>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-            <dt className="text-muted">Banka</dt>
+            <dt className="text-muted">Bank</dt>
             <dd>{instr?.bank_name?.value ?? '—'}</dd>
             <dt className="text-muted">IBAN</dt>
             <dd className="font-mono">{instr?.bank_account_number?.value ?? '—'}</dd>
-            <dt className="text-muted">Açıklama</dt>
+            <dt className="text-muted">Reference</dt>
             <dd className="font-mono">{instr?.external_transfer_memo?.value ?? '—'}</dd>
-            <dt className="text-muted">Tutar</dt>
-            <dd className="font-mono">{onramp.tryAmount} TL</dd>
+            <dt className="text-muted">Amount</dt>
+            <dd className="font-mono">{onramp.tryAmount} TRY</dd>
           </dl>
           <button
             onClick={onSettle}
             disabled={busy}
             className="mt-3 inline-flex items-center gap-2 rounded-lg bg-signal px-4 py-2 text-xs font-semibold text-ink transition hover:brightness-110 disabled:opacity-40"
           >
-            Havaleyi gönder (sandbox)
+            Send the transfer (sandbox)
           </button>
           <p className="mt-2 text-muted">
-            Gerçek anchor'da bu adım sizin bankanızdır. Mock anchor'da düğme havaleyi simüle eder.
+            With a real anchor this step is your bank. On the mock anchor the button simulates the transfer.
           </p>
         </div>
       )}
@@ -432,9 +435,9 @@ function TryDonation({
       {onramp?.retry && (
         <div className="mt-3 rounded-xl border border-edge bg-ink p-4 text-xs">
           <p className="text-muted">
-            Havale ulaştı, anchor USDC'yi henüz göndermedi
-            {onramp.status ? ` (${onramp.status})` : ''}. Bekleme anchor tarafında;
-            havale tekrarlanmaz, yalnızca durum yeniden sorulur.
+            The transfer arrived, the anchor has not sent the USDC yet
+            {onramp.status ? ` (${onramp.status})` : ''}. The wait is on the anchor's
+            side; the transfer is not repeated, only the status is polled again.
           </p>
           <div className="mt-2.5 flex items-center gap-2">
             <button
@@ -443,10 +446,10 @@ function TryDonation({
               className="inline-flex items-center gap-2 rounded-lg border border-signal/50 px-3 py-1.5 font-semibold text-signal transition hover:bg-signal/10 disabled:opacity-40"
             >
               {busy && <Loader2 size={12} className="animate-spin" />}
-              Durumu tekrar sorgula
+              Check the status again
             </button>
             <button onClick={onReset} disabled={busy} className="text-muted hover:text-white">
-              vazgeç
+              cancel
             </button>
           </div>
         </div>
@@ -455,7 +458,7 @@ function TryDonation({
   );
 }
 
-/** Adım listesindeki bir satırın durumu: bitmiş, sürüyor, bekliyor. */
+/** The state of a row in the step list: done, in progress, pending. */
 function stepState(id, onramp) {
   const order = ONRAMP_STEPS.map(([s]) => s);
   if (onramp.step === 'done') return 'done';
@@ -463,16 +466,17 @@ function stepState(id, onramp) {
   const mine = order.indexOf(id);
   if (mine < current) return 'done';
   if (mine > current) return 'pending';
-  // Kullanıcıyı ya da anchor'ı beklerken dönen ikon "çalışıyor" izlenimi verir.
+  // A spinning icon while waiting on the user or the anchor would suggest "working".
   return onramp.awaitingTransfer || onramp.retry ? 'pending' : 'active';
 }
 
 /**
- * Fon vault'taysa tek satırda söyle: bakiye artık token bakiyesi değil,
- * elde tutulan payın karşılığı.
+ * If the funds are in the vault, say so in one line: the balance is no longer a
+ * token balance but the value of the shares held.
  *
- * Getiri testnet'te 0 — o SAC için strateji yok. Bunu gizlemiyoruz; satır
- * "0.0000000" gösterecek. Dürüst olan bu, ve mainnet'te aynı satır dolacak.
+ * Yield is 0 on testnet — there is no strategy for that SAC. We do not hide it; the
+ * line will read "0.0000000". That is the honest thing, and on mainnet the same
+ * line fills up.
  */
 function VaultLine({ escrow }) {
   const principal = BigInt(escrow.campaign.principal ?? 0);
@@ -482,7 +486,7 @@ function VaultLine({ escrow }) {
   return (
     <div className="mb-6 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-xl border border-edge bg-ink px-4 py-3 text-xs">
       <span className="text-muted">
-        DeFindex vault'unda ·{' '}
+        In the DeFindex vault ·{' '}
         <a
           href={explorerContract(escrow.vault)}
           target="_blank"
@@ -493,7 +497,7 @@ function VaultLine({ escrow }) {
         </a>
       </span>
       <span className="font-mono text-muted">
-        {fromStroops(escrow.campaign.shares)} pay · getiri{' '}
+        {fromStroops(escrow.campaign.shares)} shares · yield{' '}
         <span className={yieldStroops > 0n ? 'text-verified' : ''}>
           {fromStroops(yieldStroops)}
         </span>{' '}
@@ -503,11 +507,11 @@ function VaultLine({ escrow }) {
   );
 }
 
-/** Trustline için 0.5 XLM rezerv gerekir — Horizon'un hatası okunaksız. */
+/** A trustline needs a 0.5 XLM reserve — Horizon's own error is unreadable. */
 function trustlineHint(e) {
   const code = e?.response?.data?.extras?.result_codes?.transaction;
   if (code === 'tx_insufficient_balance') {
-    return 'XLM yetersiz — trustline başına 0.5 XLM rezerv gerekiyor.';
+    return 'Not enough XLM — each trustline needs a 0.5 XLM reserve.';
   }
   return e.message;
 }

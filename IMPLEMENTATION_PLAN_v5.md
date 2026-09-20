@@ -1,100 +1,101 @@
 # Proof-of-Action — Implementation Plan v5
 
-> Claude Code'a verilecek çalışma planı. Hackathon sırasında (19–20 Eylül 2026)
-> sırayla uygulanır. **Milestone sırası değiştirilmez**; her milestone'un
-> acceptance kriteri geçmeden bir sonrakine geçilmez.
+> The working plan handed to Claude Code. Applied in order during the hackathon
+> (19–20 September 2026). **The milestone order is not negotiable**; we do not move
+> on until a milestone's acceptance criteria pass.
 >
-> v4 + DeFindex kararı kapatıldı: **vault'suz başla, vault'a hazır yaz.**
+> v4 plus the DeFindex decision, now closed: **start without the vault, write it
+> vault-ready.**
 
 ---
 
-## 0. Bağlam
+## 0. Context
 
 **Tagline:** "Aid should move at the speed of crisis."
 
-Afet/kriz anlarında toplanan bağışları merkezi havuzda bekletmeden, sahadaki
-doğrulanmış aktörlere ihtiyaç kanıtı + 2/3 çoklu imza onayıyla aktaran Soroban
-tabanlı protokol. Amaç tam teşekküllü yardım sistemi değil; bir yardım talebinin
-**kanıttan ödemeye kadar zincirde izlenebilir olduğunu** çalışan bir MVP ile
-göstermek.
+A Soroban-based protocol that, rather than parking donations collected during a
+disaster in a central pool, moves them to verified actors in the field on proof of
+need plus a 2-of-3 multisig approval. The goal is not a full-fledged aid system; it
+is to show with a working MVP that an aid request is **traceable on-chain from
+proof to payment**.
 
-**Etkinlik:** Rise In × Stellar Pro Hackathon, Genesis Track. 36 saat, 4 kişi.
+**Event:** Rise In × Stellar Pro Hackathon, Genesis Track. 36 hours, 4 people.
 
-| # | Şart | Cevabımız |
+| # | Requirement | Our answer |
 |---|---|---|
-| 1 | **Integration** — listeden bir protokol | **Stellar Wallets Kit** (`allowAllModules()`) · vault eklenirse **DeFindex** |
+| 1 | **Integration** — a protocol from the list | **Stellar Wallets Kit** (`allowAllModules()`) · **DeFindex** if the vault lands |
 | 2 | **Anchor / Local Payments** | **TR Mock Anchor** (SEP-1/10/12/38/6) |
-| 3 | **Core Feature** — load-bearing | Anchor çıkarsa ürün ölür; çok-cüzdan olmadan 2/3 onay çalışmaz |
+| 3 | **Core Feature** — load-bearing | Remove the anchor and the product dies; without multi-wallet support the 2/3 approval does not work |
 
-> Sadece Freighter kullanmak #1'i karşılamaz — Freighter curated listede yok.
-> Wallets Kit zorunlu, Freighter onun altında bir modül.
+> Using Freighter alone does not satisfy #1 — Freighter is not on the curated list.
+> Wallets Kit is mandatory; Freighter is a module underneath it.
 
-**Teslimatlar:** public repo + README, Soroban SDK ile yazılmış ve testnet'e
-deploy edilmiş contract, çalışan demo, teknik tasarım dokümanı, pitch deck
-(resmi template'in **kopyası**), kullanılan skill dosyalarının path'leri.
+**Deliverables:** a public repo plus README, a contract written with the Soroban SDK
+and deployed to testnet, a working demo, a technical design document, a pitch deck
+(a **copy** of the official template), and the paths of the skill files used.
 
 ---
 
-## 1. Mimari
+## 1. Architecture
 
 ```
-BAĞIŞÇI ──[Wallets Kit]──► USDC ──► POA ESCROW (Soroban, SAC üzerinden)
-                                        │        └─ (ops.) DeFindex vault
-                  SAHA AKTÖRÜ ──────────┤ create_request + proof_hash
+DONOR ──[Wallets Kit]──► USDC ──► POA ESCROW (Soroban, through the SAC)
+                                        │        └─ (opt.) DeFindex vault
+                  FIELD ACTOR ──────────┤ create_request + proof_hash
                                         │
         COORDINATOR A/B/C ──[Kit]───────┤ approve_request (2/3)
                                         │
                                         ▼ execute_payout
-                            RELAYER HOT WALLET (backend, sabit adres)
+                            RELAYER HOT WALLET (backend, fixed address)
                                         │ SEP-10(memo) + SEP-12(IBAN) + SEP-6
                                         ▼ USDC + Memo.id → treasury
-                                TR MOCK ANCHOR ──► TRY ──► TEDARİKÇİ IBAN
+                                TR MOCK ANCHOR ──► TRY ──► SUPPLIER IBAN
 ```
 
-**Neden relayer var:** Soroban contract'ın keypair'i yok, SEP-10 challenge
-imzalayamaz, HTTP isteği atamaz.
+**Why there is a relayer:** a Soroban contract has no keypair, cannot sign a SEP-10
+challenge and cannot make an HTTP request.
 
-**Custody duruşu (deck'te bu cümle geçsin):** Zincir üstü kısım güven
-gerektirmiyor — onay yetkisi 2/3 multisig'te. Custody yalnızca fiat rail'in son
-metresinde, ve o metre zaten bankanın.
+**Our custody stance (this sentence belongs in the deck):** the on-chain part is
+trustless — approval authority sits in a 2-of-3 multisig. Custody exists only on
+the last metre of the fiat rail, and that metre already belongs to the bank.
 
 ---
 
-## 2. Testnet gereksinimleri
+## 2. Testnet requirements
 
-**Her şey `/health`'ten okunur, hardcode edilmez.**
-`GET https://tr-mock-anchor.fly.dev/health` auth istemez, frontend'den de
-çağrılabilir:
+**Everything is read from `/health`, nothing is hardcoded.**
+`GET https://tr-mock-anchor.fly.dev/health` needs no auth and can be called from
+the frontend:
 
 ```js
-health.asset.issuer                  // USDC issuer
+health.asset.issuer                  // the USDC issuer
 health.sep.transfer_server           // /sep6
 health.sep.web_auth_endpoint         // /auth
 health.sep.kyc_server                // /sep12
 health.sep.anchor_quote_server       // /sep38
-health.sep.signing_key               // callback imza doğrulaması
-health.treasury.address              // withdraw hedefi
-health.treasury.low_balance          // bool → true ise on-ramp bekler
-health.rates.buy_rate / sell_rate    // TRY gösterimi (spread 50 bps)
+health.sep.signing_key               // for callback signature verification
+health.treasury.address              // the withdrawal destination
+health.treasury.low_balance          // bool → when true, the on-ramp waits
+health.rates.buy_rate / sell_rate    // for the TRY display (50 bps spread)
 health.limits.min_onramp_try         // "50.00"
 health.limits.max_onramp_try         // "3000"
 health.limits.min_offramp_usdc       // "1.0000000"
 ```
 
-| Alan | Değer |
+| Field | Value |
 |---|---|
 | Network | Stellar Testnet · `Test SDF Network ; September 2015` |
 | Home domain | `tr-mock-anchor.fly.dev` |
 | Horizon | `https://horizon-testnet.stellar.org` |
 | Soroban RPC | `https://soroban-testnet.stellar.org` |
 
-> 🚨 **`GDXYO6FJ…` anchor'ın SEP-10 signing key'idir — RELAYER DEĞİLDİR.**
+> 🚨 **`GDXYO6FJ…` is the anchor's SEP-10 signing key — it is NOT THE RELAYER.**
 > ```bash
 > stellar keys generate relayer --network testnet
 > stellar keys address relayer
 > ```
 
-**USDC SAC adresi (M0'ın ilk işi):**
+**The USDC SAC address (M0's first job):**
 
 ```bash
 stellar contract id asset \
@@ -102,56 +103,57 @@ stellar contract id asset \
   --network testnet
 ```
 
-> ⚠️ **Sandbox etkinlik öncesi sıfırlanabilir.** Bugün açtığınız hesaplar ve
-> SEP-12 kayıtları cumartesi sabahı gitmiş olabilir. M0'ı atlamayın.
+> ⚠️ **The sandbox can be reset before the event.** The accounts and SEP-12 records
+> you create today may be gone on Saturday morning. Do not skip M0.
 
 ---
 
 ## 3. Config
 
 ```bash
-# .env.example — repoya bu girer, .env ASLA commit edilmez
+# .env.example — this is what goes into the repo, .env is NEVER committed
 ANCHOR_HOME_DOMAIN=tr-mock-anchor.fly.dev
-# endpoint'ler ve issuer /health veya stellar.toml'dan runtime'da okunur
+# endpoints and the issuer are read at runtime from /health or stellar.toml
 
 HORIZON_URL=https://horizon-testnet.stellar.org
 SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
 NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
 
-USDC_SAC_ID=                  # M0'da türetilir
-POA_CONTRACT_ID=              # deploy sonrası
-VAULT_ADDRESS=                # opsiyonel — boşsa vault kapalı
+USDC_SAC_ID=                  # derived in M0
+POA_CONTRACT_ID=              # after the deploy
+VAULT_ADDRESS=                # optional — empty means the vault is off
 
-RELAYER_SECRET=               # backend-only, asla frontend'e sızmaz
+RELAYER_SECRET=               # backend-only, never leaks to the frontend
 ADMIN_SECRET=
 COORD_A_PUBLIC=
 COORD_B_PUBLIC=
 COORD_C_PUBLIC=
 
-PUBLIC_BASE_URL=              # on_change_callback için (Vercel URL)
-IPFS_API_KEY=                 # opsiyonel — yoksa mock CID fallback
+PUBLIC_BASE_URL=              # for on_change_callback (the Vercel URL)
+IPFS_API_KEY=                 # optional — without it, the mock CID fallback
 ```
 
 ---
 
-## 4. Contract yüzeyi — vault'a hazır yazılır
+## 4. The contract surface — written vault-ready
 
-### 4.1 Üç tasarım kuralı (vault'u sonradan eklemeyi ucuzlatır)
+### 4.1 Three design rules (they make adding the vault later cheap)
 
-**1. Bakiye iki ayrı alanda tutulur.** Vault yokken `shares` sıfır kalır.
+**1. The balance is kept in two separate fields.** Without a vault, `shares` stays
+zero.
 
 ```rust
 pub struct Campaign {
-    pub principal: i128,   // yatırılan USDC toplamı
-    pub shares: i128,      // vault share — vault kapalıyken 0
+    pub principal: i128,   // total USDC deposited
+    pub shares: i128,      // vault shares — 0 while the vault is off
 }
 ```
 
-**2. `initialize` `vault_address` parametresini BAŞTAN alır.** Vault yoksa
-`Option<Address>` olarak `None` geçilir. Sonradan parametre eklemek deploy'u ve
-tüm çağrıları bozar.
+**2. `initialize` takes the `vault_address` parameter FROM THE START.** Without a
+vault it is passed as `None` on an `Option<Address>`. Adding a parameter later
+breaks the deploy and every call.
 
-**3. Bakiye okuma tek fonksiyonda toplanır.**
+**3. Balance reads are collected into a single function.**
 
 ```rust
 fn available_balance(e: &Env) -> i128 {
@@ -162,24 +164,24 @@ fn available_balance(e: &Env) -> i128 {
 }
 ```
 
-Vault gelince sadece bu fonksiyonun içi değişir.
+When the vault arrives, only this function's body changes.
 
-### 4.2 Veri
+### 4.2 Data
 
 ```rust
 pub struct DisbursementRequest {
     pub id: u64,
-    pub supplier_ref: BytesN<32>,   // hash(iban + salt) — düz IBAN ledger'a YAZILMAZ
-    pub amount: i128,               // USDC, SAC birimi (7 ondalık)
-    pub proof_hash: BytesN<32>,     // IPFS CID veya mock SHA-256
+    pub supplier_ref: BytesN<32>,   // hash(iban + salt) — a plain IBAN is NEVER written to the ledger
+    pub amount: i128,               // USDC, in SAC units (7 decimals)
+    pub proof_hash: BytesN<32>,     // an IPFS CID or a mock SHA-256
     pub approvals_count: u32,
     pub completed: bool,
 }
-// Ayrıca: (request_id, coordinator) => bool — mükerrer onayı engeller.
-// Sadece approvals_count tutmak YETERSİZDİR.
+// Also: (request_id, coordinator) => bool — prevents double approval.
+// Keeping only approvals_count is NOT ENOUGH.
 ```
 
-### 4.3 Fonksiyonlar
+### 4.3 Functions
 
 ```rust
 fn initialize(env, admin, usdc_sac, relayer, coord_a, coord_b, coord_c,
@@ -187,134 +189,136 @@ fn initialize(env, admin, usdc_sac, relayer, coord_a, coord_b, coord_c,
 fn deposit(env, from: Address, amount: i128);          // from.require_auth()
 fn create_request(env, supplier_ref, amount, proof_hash) -> u64;
 fn approve_request(env, coordinator: Address, request_id: u64);
-    // coordinator.require_auth(); coord listesinde mi; mükerrer mi
+    // coordinator.require_auth(); on the coord list?; already approved?
 fn execute_payout(env, request_id: u64);
-    // approvals_count >= 2 && !completed; fon → SABİT relayer adresine
+    // approvals_count >= 2 && !completed; funds → the FIXED relayer address
 fn update_relayer(env, new_relayer: Address);          // admin.require_auth()
 ```
 
-> 🔐 `execute_payout` relayer adresini **parametre olarak almaz**. Alsaydı, 2/3
-> onaydan sonra çağıran taraf fonu istediği adrese yönlendirebilirdi.
+> 🔐 `execute_payout` does **not take the relayer address as a parameter**. If it
+> did, the caller could redirect the funds anywhere after the 2/3 approvals.
 
-**Event'ler:** `deposit`, `request_created`, `request_approved`, `payout_executed`
+**Events:** `deposit`, `request_created`, `request_approved`, `payout_executed`
 
-> ⚠️ **Soroban storage TTL.** `persistent` storage'ın ömrü var, uzatılmazsa veri
-> kaybolabilir. `extend_ttl` çağrısını baştan koyun.
+> ⚠️ **Soroban storage TTL.** `persistent` storage has a lifetime and data can be
+> lost unless it is extended. Put the `extend_ttl` call in from the start.
 
-**Kapsam dışı — tartışma açma, yazma:** on-chain coordinator whitelist,
-konfigüre edilebilir threshold (sabit 2/3), kısmi ödeme, iade, refund, timeout,
-kampanya kapatma, upgrade pattern, DAO/governance, mikroservis, WebSocket,
-canlı KYC.
+**Out of scope — do not debate it, do not write it:** an on-chain coordinator
+whitelist, a configurable threshold (fixed at 2/3), partial payments, returns,
+refunds, timeouts, closing a campaign, an upgrade pattern, DAO/governance,
+microservices, WebSockets, live KYC.
 
 ---
 
-## 5. Anchor entegrasyonu — kritik detaylar
+## 5. The anchor integration — critical details
 
-### 5.1 ⚠️ Wallet SDK ÇALIŞMIYOR — elle yazıldı
+### 5.1 ⚠️ The Wallet SDK DOES NOT WORK — written by hand
 
-`@stellar/typescript-wallet-sdk@1.10.0` Node 26'da **import edilemiyor**:
+`@stellar/typescript-wallet-sdk@1.10.0` **cannot be imported** on Node 26:
 
 ```
 TypeError: Cannot read properties of undefined (reading 'prototype')
   at ./src/walletSdk/Types/auth.ts (lib/bundle.js)
 ```
 
-Paketin `main`'i webpack ile tarayıcı için bundle'lanmış tek bir dosya
-(`https-browserify`, `stream-http`, `vm-browserify`) ve içine
-`@stellar/stellar-sdk@13.0.0-beta.1` gömülü. Bizim kullandığımız v14 ile
-çakışıyor. M0'da 10 dakikada tespit edildi, paket kaldırıldı.
+The package's `main` is a single file bundled for the browser with webpack
+(`https-browserify`, `stream-http`, `vm-browserify`) with
+`@stellar/stellar-sdk@13.0.0-beta.1` embedded inside it. It clashes with the v14 we
+use. Detected in 10 minutes during M0; the package was removed.
 
-**Kararlaştırılan:** SEP-1/10/12/38/6 doğrudan `@stellar/stellar-sdk` v14 +
-`fetch` ile yazıldı → [`apps/web/lib/anchor.js`](apps/web/lib/anchor.js) (~230
-satır). Endpoint'lerin hiçbiri hardcode değil, hepsi `/health`'ten okunuyor.
-Gerçek testnet on-ramp'i ile doğrulandı.
+**Decided:** SEP-1/10/12/38/6 written directly against `@stellar/stellar-sdk` v14
+plus `fetch` → [`apps/web/lib/anchor.js`](apps/web/lib/anchor.js) (~230 lines). Not
+one endpoint is hardcoded, they are all read from `/health`. Verified against the
+real testnet on-ramp.
 
-### 5.2 ⚠️ TRY kimin IBAN'ına gidiyor — mimarinin en kritik detayı
+### 5.2 ⚠️ Whose IBAN the TRY goes to — the architecture's most critical detail
 
-Off-ramp, **SEP-12'de kayıtlı IBAN'a** ödeme yapar; yani SEP-10 auth yapan
-hesabın IBAN'ına. Relayer auth yaparsa TRY **relayer'ın** IBAN'ına gider,
-tedarikçinin değil.
+The off-ramp pays **the IBAN registered in SEP-12** — that is, the IBAN of the
+account that did the SEP-10 auth. If the relayer authenticates, the TRY goes to
+**the relayer's** IBAN, not the supplier's.
 
-**Çözüm — memo ile kapsamlanmış müşteri kaydı:**
+**The fix — a memo-scoped customer record:**
 
 ```
-1. GET /auth?account=<RELAYER_PUBLIC>&memo=<tedarikçi_id>
-   → JWT'nin sub'ı "G…:memo" olur, ayrı müşteri kimliği
-2. PUT /sep12/customer  { bank_account_number: "<tedarikçi IBAN>" }
-   → Türk IBAN'ı mod-97 doğrulanır, ödemelerde kullanılır
-   → gönderilmezse deterministik sandbox IBAN'ı devreye girer
-3. GET /sep6/withdraw-exchange  (bu token'la)
-   → payout o tedarikçinin IBAN'ına gider
+1. GET /auth?account=<RELAYER_PUBLIC>&memo=<supplier_id>
+   → the JWT's sub becomes "G…:memo", a separate customer identity
+2. PUT /sep12/customer  { bank_account_number: "<supplier IBAN>" }
+   → a Turkish IBAN is mod-97 validated and used for payouts
+   → without it, the deterministic sandbox IBAN takes over
+3. GET /sep6/withdraw-exchange  (with that token)
+   → the payout goes to that supplier's IBAN
 ```
 
-Tek relayer hesabı, tedarikçi başına ayrı müşteri kaydı. `supplier_ref` ↔
-`tedarikçi_id` eşleşmesi backend'de tutulur.
+One relayer account, a separate customer record per supplier. The `supplier_ref` ↔
+`supplier_id` mapping is kept in the backend.
 
-### 5.3 `pending_trust` VAR — M0'da ölçüldü ⚠️ v5'te yanlış yazılmıştı
+### 5.3 `pending_trust` EXISTS — measured in M0 ⚠️ v5 had this wrong
 
-**Gözlenen davranış (19 Eyl 2026, `scripts/anchor-tour.js` adım 6):** hedef hesap
-var ama USDC trustline'ı yoksa deposit **claimable balance'a düşmez** —
-`pending_trust` durumunda bekler:
+**Observed behaviour (19 Sep 2026, `scripts/anchor-tour.js` step 6):** when the
+destination account exists but has no USDC trustline, the deposit does **not** fall
+into a claimable balance — it waits in `pending_trust`:
 
 > `Add a USDC trustline to G…; the anchor pays the USDC once the trustline exists.`
 
-Trustline açılır açılmaz anchor **kendiliğinden** düz `payment` gönderir ve
-`completed` olur. `claimClaimableBalance` çağrısı **gerekmez**.
+As soon as the trustline is opened the anchor sends a plain `payment` **by itself**
+and the transaction goes `completed`. No `claimClaimableBalance` call is **needed**.
 
-`/sep6/info` yine `features.claimable_balances: true` ilan ediyor
-(`account_creation: false` ile birlikte) — claimable balance yolu muhtemelen
-hiç açılmamış hesaplar için. Fonlanmış-ama-trustline'sız senaryoda test edildi,
-çıkan sonuç yukarıdaki.
+`/sep6/info` still advertises `features.claimable_balances: true` (alongside
+`account_creation: false`) — the claimable balance path is probably for accounts
+that were never created. Tested in the funded-but-trustline-less scenario, with the
+result above.
 
-**UI karşılığı:** claim butonu değil, **"USDC trustline aç"** butonu. Trustline
-sonrası poll'a devam et, kendiliğinden `completed` olur.
+**The UI counterpart:** not a claim button but an **"Open a USDC trustline"**
+button. Keep polling after the trustline; it goes `completed` on its own.
 
 | Status | Deposit | Withdraw |
 |---|---|---|
-| `pending_user_transfer_start` | TRY bekleniyor (simüle et) | Memo'lu USDC bekleniyor |
-| `pending_anchor` | TRY alındı, USDC ödeniyor | — |
-| `pending_trust` | **Hedefte trustline yok — açılınca otomatik ödenir** | — |
-| `pending_stellar` | Gönderim yeniden deneniyor | — |
-| `completed` | `stellar_transaction_id` | `external_transaction_id` = banka ref |
-| `error` | Kalıcı hata, TRY iade | İptal |
+| `pending_user_transfer_start` | Waiting for TRY (simulate it) | Waiting for USDC with a memo |
+| `pending_anchor` | TRY received, USDC being paid out | — |
+| `pending_trust` | **No trustline at the destination — paid automatically once opened** | — |
+| `pending_stellar` | The send is being retried | — |
+| `completed` | `stellar_transaction_id` | `external_transaction_id` = the bank ref |
+| `error` | Permanent failure, TRY refunded | Cancelled |
 
-Takılırsa `pending_reason`: `treasury_low` kendiliğinden çözülür.
+If it stalls with `pending_reason: treasury_low`, that resolves on its own.
 
-### 5.4 Exchange varyantları
+### 5.4 The exchange variants
 
-Talepler TRY cinsinden → `/sep6/withdraw-exchange` ve `/sep6/deposit-exchange`
-fiyatlamayı açık yapar, `quote_id` bağlanır.
+Requests are denominated in TRY → `/sep6/withdraw-exchange` and
+`/sep6/deposit-exchange` make the pricing explicit and bind a `quote_id`.
 
-⚠️ **v5'te yanlış yazılmıştı.** Exchange varyantlarında **zincir üstü bacak
-asset koduyla**, zincir dışı bacak SEP-38 formatıyla verilir. SEP-38 formatı
-yalnızca `/sep38/*` çağrılarında geçerli:
+⚠️ **v5 had this wrong.** In the exchange variants the **on-chain leg is given as
+an asset code** and the off-chain leg in SEP-38 format. The SEP-38 format is valid
+only in `/sep38/*` calls:
 
 ```
-# DOĞRU (M2'de ölçüldü)
+# CORRECT (measured in M2)
 source_asset=USDC&destination_asset=iso4217:TRY&amount=…&quote_id=…
 
-# YANLIŞ → 400 "unsupported source_asset 'stellar:USDC:…'; this anchor ramps USDC"
+# WRONG → 400 "unsupported source_asset 'stellar:USDC:…'; this anchor ramps USDC"
 source_asset=stellar:USDC:<issuer>&…
 ```
 
-`funding_method=bank_account` kullanın — `type=bank_account` deprecated.
+Use `funding_method=bank_account` — `type=bank_account` is deprecated.
 
-### 5.5 Quote gerçeği
+### 5.5 The truth about quotes
 
-SEP-38 quote **15 dakika** geçerli (`expire_after` ile 1 saate kadar), tek
-kullanımlık. Off-ramp kuru 30 dakika kilitli, sonra yeniden fiyatlanır.
+A SEP-38 quote is valid for **15 minutes** (up to an hour with `expire_after`) and
+is single-use. The off-ramp rate is locked for 30 minutes, then repriced.
 
-**Kurgu:** talep açılışında gösterge quote (UI), ödeme anında firm quote (işlem).
+**The design:** an indicative quote when the request is opened (UI), a firm quote at
+payout time (the transaction).
 
-Jüri cümlesi: *"Kur riskini biliyoruz; talep anında gösterge, ödeme anında firm
-quote alıyoruz. Slippage toleransı roadmap'te."*
+The line for the judges: *"We know about FX risk; we show an indicative quote at
+request time and take a firm quote at payout time. Slippage tolerance is on the
+roadmap."*
 
-### 5.6 Off-ramp gelen miktarı çevirir
+### 5.6 The off-ramp converts whatever arrives
 
-Kısmi/fazla ödemeler de tamamlanır. **Sadece memo doğru olmak zorunda** —
+Partial and excess payments also complete. **Only the memo has to be right** —
 `Memo.id(withdraw.memo)`, `memo_type: "id"`.
 
-### 5.7 `on_change_callback` — polling yerine push
+### 5.7 `on_change_callback` — push instead of polling
 
 ```js
 // on_change_callback=<PUBLIC_BASE_URL>/api/anchor-callback
@@ -323,141 +327,146 @@ const ok = Keypair.fromPublicKey(SIGNING_KEY)
   .verify(Buffer.from(`${t}.${req.headers.host}.${rawBody}`), Buffer.from(s, 'base64'));
 ```
 
-Vercel public URL verdiği için çalışır. **Polling'i yedek tutun** (on-ramp 3 sn,
-off-ramp tespiti 5 sn).
+It works because Vercel gives us a public URL. **Keep polling as a fallback** (the
+on-ramp runs on a 3 s cadence, off-ramp detection on 5 s).
 
 ---
 
-## 6. Milestone'lar
+## 6. Milestones
 
-Sıralama mantığı: **en riskli dış bağımlılık en erken kanıtlanır.**
+The ordering logic: **the riskiest external dependency is proven earliest.**
 
-### M0 — Keşif (Cmt 10:30 → 13:30, workshop'larla paralel)
+### M0 — Discovery (Sat 10:30 → 13:30, in parallel with the workshops)
 
-İki kişi workshop'ta (özellikle #3 Anchor Integration), iki kişi kurulumda.
+Two people in the workshops (especially #3, Anchor Integration), two on setup.
 
-- `GET /health` → limitler, treasury, issuer, kurlar
-- `/explorer` ve `/guide` aç, elle bir deposit turu at
-- **`pending_trust`'ı bilerek tetikle** (trustline'sız hesaba deposit)
-- 5 testnet hesabı üret + Friendbot ile fonla (relayer, admin, coord A/B/C)
-- Relayer'da USDC trustline aç
-- USDC SAC ID türet
-- Freighter'ı **Testnet'e çevir** (varsayılan Mainnet!)
-- Yedek: Circle faucet (20 USDC / adres / 2 saat)
-- **Vault kontrolü (30 dk, bkz. bölüm 10):** `get_assets` çağır, asset adresi
-  USDC SAC ile eşleşiyor mu
+- `GET /health` → limits, treasury, issuer, rates
+- Open `/explorer` and `/guide`, run a deposit tour by hand
+- **Trigger `pending_trust` on purpose** (a deposit to an account with no trustline)
+- Generate 5 testnet accounts and fund them with Friendbot (relayer, admin, coord A/B/C)
+- Open a USDC trustline on the relayer
+- Derive the USDC SAC ID
+- Switch Freighter **to Testnet** (it defaults to Mainnet!)
+- Fallback: the Circle faucet (20 USDC per address per 2 hours)
+- **The vault check (30 min, see section 10):** call `get_assets` and see whether
+  the asset address matches the USDC SAC
 
-**Acceptance:** Anchor akışı gözle doğrulandı, SAC ID elde, limitler biliniyor,
-vault kararı verildi.
+**Acceptance:** the anchor flow verified by eye, the SAC ID in hand, the limits
+known, the vault decision made.
 
-> Her hesapta min 1 XLM, her trustline +0.5 XLM.
+> At least 1 XLM in every account, plus 0.5 XLM per trustline.
 
 ---
 
-### M1 — Para içeri giriyor (13:30 → 18:30)
+### M1 — Money goes in (13:30 → 18:30)
 
 - Contract: `initialize` (vault `None`) + `deposit` + `create_request` +
-  `execute_payout` (**multisig henüz yok**)
-- Bölüm 4.1'deki üç tasarım kuralına uy: `principal`/`shares` ayrı,
-  `vault: Option<Address>`, `available_balance()` tek fonksiyon
-- `cargo test`: deposit, SAC transfer, payout guard
-- Testnet deploy → `POA_CONTRACT_ID`
+  `execute_payout` (**no multisig yet**)
+- Follow the three design rules in 4.1: `principal`/`shares` separate,
+  `vault: Option<Address>`, `available_balance()` as a single function
+- `cargo test`: deposit, SAC transfer, the payout guard
+- Deploy to testnet → `POA_CONTRACT_ID`
 - `lib/wallet.js`: Wallets Kit, `allowAllModules()`
-- Bağışçı akışı: cüzdan bağla → `deposit` imzala
+- The donor flow: connect a wallet → sign a `deposit`
 
-**Acceptance:** Cüzdandan USDC yatırıldı, escrow bakiyesi zincirde, TX hash elde.
+**Acceptance:** USDC deposited from a wallet, the escrow balance on-chain, a TX hash
+in hand.
 
-> Anchor tıkanırsa Circle faucet USDC'siyle devam edin — M1 anchor'a bağımlı
-> olmasın.
-
----
-
-### M2 — Para dışarı çıkıyor (18:30 → 01:00) ⚠️ EN KRİTİK
-
-- Contract: `approve_request` + mükerrer oy engeli + 2/3 guard + `update_relayer`
-- `cargo test`: yetkisiz onay, mükerrer onay, mükerrer ödeme, yetersiz bakiye
-- `lib/anchor.js` (Wallet SDK üzerinden):
-  - SEP-10 auth, **401'de otomatik yenileme**
-  - **memo'lu tedarikçi kaydı** (5.2)
-  - SEP-38 firm quote
-  - `withdraw-exchange` → `account_id` + `memo` → `Memo.id` ile USDC gönder
-  - status poll + `on_change_callback` handler
-- API route: `/api/payout`, `/api/anchor-callback`
-
-**Acceptance (01:00, sert deadline):** USDC deposit → request → 2 onay → payout
-→ relayer → withdraw → **tedarikçinin IBAN'ına** TRY `completed`.
-
-> 01:00'de çalışmıyorsa: **özellik ekleme, kesme yap.**
+> If the anchor stalls, carry on with Circle faucet USDC — M1 must not depend on
+> the anchor.
 
 ---
 
-### M3 — Görünür hale getir (01:00 → 07:00, NÖBETLEŞE)
+### M2 — Money goes out (18:30 → 01:00) ⚠️ THE MOST CRITICAL
 
-**İki kişi uyur, iki kişi çalışır. Pazarlık yok.**
+- Contract: `approve_request` + the double-vote guard + the 2/3 guard +
+  `update_relayer`
+- `cargo test`: unauthorized approval, double approval, double payout, insufficient
+  balance
+- `lib/anchor.js` (over the Wallet SDK):
+  - SEP-10 auth, **automatic renewal on 401**
+  - the **memo-scoped supplier record** (5.2)
+  - a SEP-38 firm quote
+  - `withdraw-exchange` → `account_id` + `memo` → send USDC with `Memo.id`
+  - status polling plus the `on_change_callback` handler
+- API routes: `/api/payout`, `/api/anchor-callback`
+
+**Acceptance (01:00, a hard deadline):** USDC deposit → request → 2 approvals →
+payout → relayer → withdrawal → TRY `completed` **in the supplier's IBAN**.
+
+> If it does not work by 01:00: **cut scope, do not add features.**
+
+---
+
+### M3 — Make it visible (01:00 → 07:00, IN SHIFTS)
+
+**Two people sleep, two people work. Not negotiable.**
 
 Next.js (App Router) + Tailwind + Lucide:
 
-| Ekran | İçerik |
+| Screen | Contents |
 |---|---|
 | Hero | "Aid should move at the speed of crisis." |
-| Donor | Cüzdan bağlantısı, USDC + escrow bakiyesi, Donate, TX hash |
-| Field Request | İhtiyaç, TRY tutar, tedarikçi, IBAN, evidence upload |
-| Multisig | Coordinator A/B/C durumları, 2/3 barı, evidence önizleme |
+| Donor | Wallet connection, USDC + escrow balance, Donate, TX hash |
+| Field Request | The need, the TRY amount, the supplier, the IBAN, evidence upload |
+| Multisig | Coordinator A/B/C states, the 2/3 bar, an evidence preview |
 | Audit Timeline | Evidence → Request → Approvals → Released → Anchor → TRY → DONE |
 
-**Evidence:** IPFS → CID → Soroban. **Plan B:** IPFS/CORS 30 dakikayı aşarsa
-**hemen bırak** — client-side Base64 → SHA-256 → mock CID. Fallback kodu M3
-başlamadan hazır olsun.
+**Evidence:** IPFS → CID → Soroban. **Plan B:** if IPFS/CORS costs more than 30
+minutes, **drop it immediately** — client-side Base64 → SHA-256 → a mock CID. The
+fallback code should be ready before M3 starts.
 
-**Acceptance:** Demo tamamen UI üzerinden yapılabiliyor, terminal gerekmiyor.
-
----
-
-### M3.5 — DeFindex vault ✅ YAPILDI (M4 sonrası)
-
-M0'daki kontrol hazır vault için kırmızıydı ama sonucu yanlış okumuştuk
-(bkz. 10.1.a). Kendi vault'umuzu kurduk:
-
-- [`scripts/create-vault.sh`](scripts/create-vault.sh) — factory'den vault,
-  anchor USDC SAC'ı üzerine, tohum yatırımıyla
-- `deposit` → vault'a yatırır, pay kaydeder · `execute_payout` → pay bozdurur
-- `available_balance()` payın bugünkü karşılığını okur
-- `authorize_as_current_contract` — vault'un escrow üzerinden yaptığı token
-  çekişi için; olmadan `Error(Auth, InvalidAction)`
-- 7 yeni contract testi (mock vault, gerçek auth davranışıyla)
+**Acceptance:** the demo can be performed entirely through the UI, with no terminal.
 
 ---
 
-### M4 — Sağlamlaştırma + teslimat (07:00 → 11:00)
+### M3.5 — The DeFindex vault ✅ DONE (after M4)
 
-- Edge case'ler: expired JWT, `pending_trust` (trustline aç butonu),
-  eksik memo guard, limit dışı tutar, `treasury_low` uyarısı
-- Timeline'ın gerçekten on-chain event + anchor status'ten beslendiğini doğrula
-- **anchor-tests çalıştır**, çıktıyı README'ye koy:
+The M0 check was red for the ready-made vault, but we read the result wrong (see
+10.1.a). We created our own vault:
+
+- [`scripts/create-vault.sh`](scripts/create-vault.sh) — a vault from the factory,
+  on top of the anchor's USDC SAC, with a seed deposit
+- `deposit` → puts funds into the vault and records shares · `execute_payout` →
+  unwinds shares
+- `available_balance()` reads today's value of the shares
+- `authorize_as_current_contract` — for the token pull the vault makes through the
+  escrow; without it, `Error(Auth, InvalidAction)`
+- 7 new contract tests (a mock vault with the real auth behaviour)
+
+---
+
+### M4 — Hardening plus delivery (07:00 → 11:00)
+
+- Edge cases: an expired JWT, `pending_trust` (the open-trustline button), the
+  missing-memo guard, out-of-range amounts, the `treasury_low` warning
+- Verify that the timeline really is fed from on-chain events plus anchor status
+- **Run anchor-tests** and put the output in the README:
   ```bash
   npx stellar-anchor-tests --home-domain https://tr-mock-anchor.fly.dev \
     --seps 1 10 12 6 38 --asset-code USDC --sep-config anchor-tests.config.json
   ```
-- `README.md`: ne yapıyoruz, mimari, kurulum, demo adımları, contract ID, linkler
-- `docs/architecture.md`: bileşenler, neden relayer, custody duruşu, tradeoff'lar
-- **Kullanılan skill dosyalarının path'lerini yaz** (submission şartı)
-- Deck: resmi template'in kopyası, **tek kişi** yazar
+- `README.md`: what we are doing, the architecture, setup, demo steps, the contract
+  ID, links
+- `docs/architecture.md`: components, why a relayer, the custody stance, trade-offs
+- **Write down the paths of the skill files used** (a submission requirement)
+- The deck: a copy of the official template, written by **one person**
 
 ---
 
-### 11:00 → 12:00 — DONMUŞ
+### 11:00 → 12:00 — FROZEN
 
-- [ ] Takım adı, tüm üyelerin ad + iletişim
-- [ ] GitHub repo (public mi kontrol et)
-- [ ] Live demo / deployment URL
-- [ ] Pitch deck linki
-- [ ] **Track: Genesis** ← seçilmeyen track'e değerlendirilmezsin
-- [ ] Demo 3 kez prova
-- [ ] Ekran kaydı (internet çökerse yedek)
+- [ ] Team name, every member's name and contact details
+- [ ] The GitHub repo (check that it is public)
+- [ ] The live demo / deployment URL
+- [ ] The pitch deck link
+- [ ] **Track: Genesis** ← you are not judged in a track you did not pick
+- [ ] Rehearse the demo 3 times
+- [ ] A screen recording (a fallback if the internet dies)
 
 ---
 
-## 7. Repo yapısı
+## 7. Repo layout
 
 ```
 proof-of-action/
@@ -476,107 +485,112 @@ proof-of-action/
 
 ---
 
-## 8. İş bölümü
+## 8. Division of work
 
-| Kişi | Sorumluluk |
+| Person | Responsibility |
 |---|---|
-| 1 | Contract (Rust/Soroban), testler |
-| 2 | Relayer + anchor adapter, API routes |
-| 3 | Frontend + Wallets Kit + evidence |
-| 4 | Demo senaryosu, entegrasyon testi, README + docs + deck |
+| 1 | The contract (Rust/Soroban), tests |
+| 2 | The relayer plus the anchor adapter, API routes |
+| 3 | The frontend plus Wallets Kit plus evidence |
+| 4 | The demo scenario, integration testing, README + docs + deck |
 
-Bölünme M1'in başında. Dördü birden contract'a dalarsa relayer geceye kalır.
+The split happens at the start of M1. If all four dive into the contract, the
+relayer slips to the night.
 
 ---
 
-## 9. Yaygın hata tablosu
+## 9. Common error table
 
-| Belirti | Sebep | Çözüm |
+| Symptom | Cause | Fix |
 |---|---|---|
-| 401 / 403 | JWT dolmuş veya yok | SEP-10 tekrar |
-| Deposit `pending_trust`'ta takıldı | Hedefte USDC trustline yok | `changeTrust` — anchor kalanı kendi yapar |
-| Deposit gelmiyor | Banka transferi simüle edilmedi | `POST /sep6/tx/{id}/simulate-bank-transfer` |
-| `pending_reason: treasury_low` | Treasury düşük | Kendiliğinden çözülür |
-| Withdraw tamamlanmıyor | Memo eksik/yanlış tip | `Memo.id(memo)`, `memo_type: "id"` |
-| TRY yanlış IBAN'a gitti | SEP-12 memo kapsamı yok | 5.2'deki akış |
-| Contract USDC transfer edemiyor | Issuer adresi kullanılmış | SAC ID kullan |
-| Limit hatası | Hardcode tavan | `/health`'ten oku |
-| Contract verisi kayboldu | TTL uzatılmadı | `extend_ttl` |
+| 401 / 403 | The JWT expired or is missing | Redo SEP-10 |
+| A deposit stuck in `pending_trust` | No USDC trustline at the destination | `changeTrust` — the anchor does the rest |
+| The deposit never arrives | The bank transfer was not simulated | `POST /sep6/tx/{id}/simulate-bank-transfer` |
+| `pending_reason: treasury_low` | The treasury is low | It resolves on its own |
+| The withdrawal never completes | The memo is missing or the wrong type | `Memo.id(memo)`, `memo_type: "id"` |
+| The TRY went to the wrong IBAN | No SEP-12 memo scope | The flow in 5.2 |
+| The contract cannot transfer USDC | The issuer address was used | Use the SAC ID |
+| A limit error | A hardcoded ceiling | Read it from `/health` |
+| Contract data disappeared | The TTL was not extended | `extend_ttl` |
 
 ---
 
-## 10. DeFindex vault — M3.5 bloğu
+## 10. The DeFindex vault — the M3.5 block
 
-### 10.1 Karar
+### 10.1 The decision
 
-**Vault'suz başla, vault'a hazır yaz.** Bölüm 4.1'deki üç kural uygulanırsa
-sonradan eklemek ~40-50 satır ve 2-3 saat.
+**Start without the vault, write it vault-ready.** With the three rules in section
+4.1 applied, adding it later is ~40–50 lines and 2–3 hours.
 
-### 10.1.a ⚠️ M0 SONUCU DÜZELTİLDİ — DeFindex entegre edildi
+### 10.1.a ⚠️ THE M0 CONCLUSION WAS CORRECTED — DeFindex is integrated
 
-> **Bu bölüm sonradan düzeltildi.** M0'da "elendi" yazılmıştı; ölçüm doğruydu
-> ama sonuç yanlıştı. Hazır vault kullanılamıyor — ama factory'den **kendi
-> vault'umuzu** kurabiliyoruz. `create_defindex_vault` anchor'ın SAC'ıyla
-> çağrıldı ve geçti. Bkz. [`scripts/create-vault.sh`](scripts/create-vault.sh).
+> **This section was corrected afterwards.** M0 recorded it as "ruled out"; the
+> measurement was right but the conclusion was wrong. The ready-made vault cannot be
+> used — but we can create **our own vault** from the factory.
+> `create_defindex_vault` was called with the anchor's SAC and passed. See
+> [`scripts/create-vault.sh`](scripts/create-vault.sh).
 
-10.2'deki kontrol çalıştırıldı, **kırmızı** — hazır vault için doğru:
+The check in 10.2 was run and came back **red** — correctly so, for the ready-made
+vault:
 
 ```
 vault get_assets  → CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU
 anchor USDC SAC   → CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA
 ```
 
-`usdc_paltalabs_vault` **başka bir USDC** tutuyor (Blend'in kendi testnet
-USDC'si), anchor'ın Circle testnet USDC'sini değil. Escrow'daki fonu **bu**
-vault'a yatıramayız.
+`usdc_paltalabs_vault` holds **a different USDC** (Blend's own testnet USDC), not
+the anchor's Circle testnet USDC. We cannot put the escrow's funds into **that**
+vault.
 
-**Atlanan soru:** hazır vault'a girmek zorunda mıyız? Hayır. Factory
-(`CDSCWE4GLNBYYTES2OCYDFQA2LLY4RBIAX6ZI32VSUXD7GO6HRPO4A32`) istediğimiz asset
-üzerine vault kuruyor ve boş strateji listesini kabul ediyor (vault
-contract'ında `validate_strategies` yalnızca tekrarı reddediyor).
+**The question we skipped:** do we have to use the ready-made vault? No. The factory
+(`CDSCWE4GLNBYYTES2OCYDFQA2LLY4RBIAX6ZI32VSUXD7GO6HRPO4A32`) creates a vault on any
+asset we like and accepts an empty strategy list (in the vault contract,
+`validate_strategies` only rejects duplicates).
 
-**Düzeltilmiş karar: DeFindex entegre, opsiyonel.** `VAULT_ADDRESS` doluysa fon
-vault'ta, boşsa escrow'da. Integration şartı (bölüm 0, #1) artık iki protokolle
-karşılanıyor.
+**The corrected decision: DeFindex is integrated, optionally.** With `VAULT_ADDRESS`
+set the funds are in the vault, otherwise in the escrow. The integration requirement
+(section 0, #1) is now met by two protocols.
 
-**Dürüst sınır:** o SAC için strateji olmadığından **testnet'te getiri sıfır**.
-Gerekçe bölüm 10.5'teki gibi mimari — zaten öyle planlanmıştı.
+**The honest limit:** with no strategy for that SAC, **yield on testnet is zero**.
+The rationale is architectural, as in section 10.5 — which is how it was planned
+anyway.
 
-### 10.2 M0'daki kontrol (30 dk)
+### 10.2 The check in M0 (30 min)
 
 ```bash
-# Adresleri taze çek — testnet sık yeniden deploy edilir
+# Pull the addresses fresh — testnet is redeployed often
 curl -s https://raw.githubusercontent.com/defindex-io/stellar-contracts/main/public/testnet.contracts.json
 
-# Vault'un asset'ini doğrula
+# Verify the vault's asset
 stellar contract invoke --id <usdc_paltalabs_vault> --network testnet \
-  --source <hesap> -- get_assets
+  --source <account> -- get_assets
 
-# USDC SAC ile karşılaştır
+# Compare it with the USDC SAC
 stellar contract id asset \
   --asset USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5 \
   --network testnet
 ```
 
-Bilinen testnet adresi (19 Eylül 2026 itibarıyla):
+The known testnet address (as of 19 September 2026):
 `usdc_paltalabs_vault = CBMVK2JK6NTOT2O4HNQAIQFJY232BHKGLIMXDVQVHIIZKDACXDFZDWHN`
-— canlı, ~949 USDC bakiyeli, Blend autocompound stratejisi, `sep41` trait.
+— live, with a balance of ~949 USDC, a Blend autocompound strategy, the `sep41`
+trait.
 
-**Eşleşmiyorsa DeFindex'i tamamen bırak.** Wallets Kit savunması yeterli.
+**If it does not match, drop DeFindex entirely.** The Wallets Kit defence is enough.
 
-### 10.3 API DEĞİL, cross-contract
+### 10.3 NOT the API — cross-contract
 
-DeFindex API'si imzasız XDR döndürüyor; imzalayan bir **hesap** gerekiyor.
-Soroban contract imza atamaz → escrow API'yi kullanamaz. Çözüm: vault'u
-doğrudan çağır.
+The DeFindex API returns unsigned XDR and needs an **account** to sign it. A Soroban
+contract cannot sign → the escrow cannot use the API. The fix: call the vault
+directly.
 
 ```rust
 // deposit
 let deposit_args = vec![
     &e,
-    &amounts_desired,                 // Vec<i128>, tek elemanlı
-    &amounts_min,                     // slippage koruması
-    &e.current_contract_address(),    // from = ESCROW
+    &amounts_desired,                 // Vec<i128>, single element
+    &amounts_min,                     // slippage protection
+    &e.current_contract_address(),    // from = THE ESCROW
     &true,                            // invest
 ];
 let (_deposited, shares_minted, _alloc) = e.try_invoke_contract::<...>(
@@ -586,9 +600,9 @@ campaign.shares += shares_minted;
 ```
 
 ```rust
-// withdraw — share cinsinden, önce dönüştür
+// withdraw — denominated in shares, so convert first
 let total_supply = invoke(vault, "total_supply");
-let managed      = invoke(vault, "fetch_total_managed_funds"); // tek asset → [0]
+let managed      = invoke(vault, "fetch_total_managed_funds"); // single asset → [0]
 let shares_to_burn = total_supply * amount_to_withdraw / managed.total_amount;
 
 let withdraw_args = vec![
@@ -596,41 +610,46 @@ let withdraw_args = vec![
 ];
 ```
 
-### 10.4 Kapsam
+### 10.4 Scope
 
-**Yazılacak:** `deposit` vault'a yatırır + share kaydeder; `execute_payout`
-share bozdurur; `initialize`'da vault adresi; UI'da tek satır bakiye.
+**To write:** `deposit` puts funds into the vault and records shares;
+`execute_payout` unwinds shares; the vault address in `initialize`; a single balance
+line in the UI.
 
-**Yazılmayacak:** APY gösterimi/grafik, rebalancing, strateji seçimi, migration,
-`rescue`, slippage ayar ekranı, çoklu vault.
+**Not to write:** an APY display or chart, rebalancing, strategy selection,
+migration, `rescue`, a slippage settings screen, multiple vaults.
 
-### 10.5 Anlatım
+### 10.5 How to talk about it
 
-Getiri argümanını abartmayın — 1000$ iki günde ~22 sent. Gerekçe **mimari**:
+Do not oversell the yield argument — $1000 earns about 22 cents in two days. The
+rationale is **architectural**:
 
-> "Bağış fonu atıl beklemiyor — standart bir vault arayüzünde duruyor.
-> Custody escrow contract'ında; vault pozisyonu da contract'ın adına."
+> "The donated funds are not sitting idle — they hold a position behind a standard
+> vault interface. Custody stays with the escrow contract; the vault position is in
+> the contract's name too."
 
-Afet-öncesi fonlama (para aylarca bekler, oracle tetikler) **roadmap slaytında**
-kalır, kodda değil.
+Pre-disaster funding (money waits for months, an oracle triggers it) stays **on the
+roadmap slide**, not in the code.
 
 ---
 
-## 11. Demo senaryosu
+## 11. The demo scenario
 
-1. Bağışçı Wallets Kit ile bağlanır, escrow'a USDC yatırır → TX hash
-2. Saha aktörü talep açar: Yakıt, 1.500 TRY, ABC Akaryakıt, evidence yükler
-   → SEP-38 gösterge quote
-3. Coordinator A onaylar (1/2) — **kendi cüzdanıyla**
-4. Coordinator B onaylar (2/2) — **farklı cüzdanla** ← Wallets Kit'in gerekçesi
-5. `execute_payout` → USDC relayer'a → TX hash
-6. Relayer: memo'lu tedarikçi kaydı → firm quote → withdraw-exchange →
-   `Memo.id` ile USDC → anchor `completed`
-7. Audit Detail: request ID, supplier ref, TRY/USDC, proof CID, contract ID,
-   deposit/approval/payout TX, anchor withdrawal ID, `external_transaction_id`
+1. The donor connects with Wallets Kit and deposits USDC into the escrow → TX hash
+2. The field actor opens a request: fuel, 1,500 TRY, ABC Fuel Co., uploads evidence
+   → a SEP-38 indicative quote
+3. Coordinator A approves (1/2) — **with their own wallet**
+4. Coordinator B approves (2/2) — **with a different wallet** ← the reason for
+   Wallets Kit
+5. `execute_payout` → USDC to the relayer → TX hash
+6. The relayer: the memo-scoped supplier record → a firm quote → withdraw-exchange
+   → USDC with `Memo.id` → the anchor goes `completed`
+7. Audit Detail: request ID, supplier ref, TRY/USDC, the proof CID, the contract ID,
+   the deposit/approval/payout TXs, the anchor withdrawal ID,
+   `external_transaction_id`
 
-Her adımda Stellar Expert linki. Anlatılan tek cümle:
-**"Para nereye gitti?" sorusunun cevabı zincirde.**
+A Stellar Expert link at every step. The one sentence we say:
+**the answer to "where did the money go?" is on-chain.**
 
-**Bonus:** demo sırasında gerçek bir kullanıcıyı (yerel dernek/gönüllü) canlı
-onboard et — metriklerde "onboarded real users" var.
+**Bonus:** onboard a real user (a local association or volunteer) live during the
+demo — "onboarded real users" is one of the metrics.

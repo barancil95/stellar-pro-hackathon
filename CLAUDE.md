@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Proof-of-Action: a Soroban escrow that releases disaster-relief USDC only after a field request (with a proof hash) gets 2-of-3 coordinator approvals, then off-ramps it to TRY at a supplier's IBAN through the **TR Mock Anchor** (`tr-mock-anchor.fly.dev`, SEP-1/10/12/38/6). Stellar **testnet** only. It was built for a hackathon (Rise In × Stellar Pro, Genesis Track).
 
-Docs, code comments, commit messages and UI strings are in **Turkish**. Keep that when you edit them.
+Docs, code comments, commit messages and UI strings are in **English**. The repo was translated from Turkish on 2026-09-20; keep English when you edit them.
 
 Reference docs in the repo:
 - `docs/architecture.md`: design decisions and tradeoffs. Read it before you change the payout flow.

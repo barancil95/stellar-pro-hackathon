@@ -1,13 +1,15 @@
 /**
- * Relayer'ın fiat bacağı — SUNUCU TARAFI. Asla client'a import edilmez.
+ * The relayer's fiat leg — SERVER SIDE. Never imported into the client.
  *
- * Contract'ın keypair'i yok: SEP-10 challenge imzalayamaz, HTTP isteği atamaz.
- * `execute_payout` fonu relayer'a bırakır, buradan sonrası zincir dışıdır.
+ * The contract has no keypair: it cannot sign a SEP-10 challenge or make an HTTP
+ * request. `execute_payout` leaves the funds with the relayer; everything past
+ * that point is off-chain.
  *
- * ⚠️ Mimarinin en kritik detayı (plan 5.2): off-ramp, TRY'yi **SEP-10 auth
- * yapan kimliğin** SEP-12 kaydındaki IBAN'a öder. Relayer memo'suz auth
- * yaparsa para relayer'ın IBAN'ına gider, tedarikçinin değil.
- * Çözüm: her tedarikçi için `G…:memo` kapsamlı ayrı müşteri kaydı.
+ * ⚠️ The most critical detail of the architecture (plan 5.2): the off-ramp pays
+ * the TRY to the IBAN in the SEP-12 record of **whichever identity did the SEP-10
+ * auth**. If the relayer authenticates without a memo, the money goes to the
+ * relayer's IBAN, not the supplier's.
+ * The fix: a separate `G…:memo`-scoped customer record per supplier.
  */
 
 import {
@@ -28,14 +30,15 @@ const NETWORK_PASSPHRASE = process.env.NETWORK_PASSPHRASE || Networks.TESTNET;
 
 function relayerKeypair() {
   const secret = process.env.RELAYER_SECRET;
-  if (!secret) throw new Error('RELAYER_SECRET yok — bu modül sadece sunucuda çalışır');
+  if (!secret) throw new Error('RELAYER_SECRET missing — this module only runs on the server');
   return Keypair.fromSecret(secret);
 }
 
 /**
- * Tedarikçiyi memo kapsamlı müşteri olarak kaydeder.
- * @param supplierId uint64 — backend'de supplier_ref ile eşlenir
- * @param iban Türk IBAN'ı; verilmezse anchor deterministik sandbox IBAN'ı atar
+ * Registers the supplier as a memo-scoped customer.
+ * @param supplierId uint64 — mapped to supplier_ref in the backend
+ * @param iban a Turkish IBAN; without one the anchor assigns a deterministic
+ *             sandbox IBAN
  */
 export async function registerSupplier({ supplierId, iban, name }) {
   const session = anchor.makeSession(relayerKeypair(), { memo: supplierId });
@@ -50,14 +53,14 @@ export async function registerSupplier({ supplierId, iban, name }) {
 }
 
 /**
- * Fiat bacağının BİRİNCİ fazı: kayıt → firm quote → withdraw → USDC gönder.
+ * PHASE ONE of the fiat leg: register → firm quote → withdraw → send USDC.
  *
- * Burada durup dönüyoruz. Eskiden bu fonksiyon anchor `completed` diyene kadar
- * 180 sn polling yapıyordu; Vercel'de fonksiyon tavanı (Hobby'de 60 sn) o
- * süreye yetmiyor ve istek timeout'a düşüyordu. Durum ikinci fazda geliyor:
- * asıl yol `on_change_callback`, yedek yol `fetchPayoutStatus`.
+ * We stop and return here. This function used to poll for up to 180 s until the
+ * anchor said `completed`; Vercel's function ceiling (60 s on Hobby) is shorter
+ * than that and the request timed out. The status arrives in phase two: the main
+ * path is `on_change_callback`, the fallback is `fetchPayoutStatus`.
  *
- * @param usdcAmount  ondalık string, ör. "5.0000000"
+ * @param usdcAmount  a decimal string, e.g. "5.0000000"
  */
 export async function startPayout({
   requestId,
@@ -72,16 +75,16 @@ export async function startPayout({
   const h = await anchor.health();
   const ids = await anchor.assetIds();
 
-  // Limit dışı tutarı anchor'a gitmeden yakala — hata mesajı okunaklı olsun.
+  // Catch an out-of-range amount before going to the anchor — for a readable error.
   await anchor.assertOfframpAmount(usdcAmount);
   if (h.treasury.low_balance) {
-    onProgress({ step: 'warn', message: 'anchor treasury düşük — off-ramp gecikebilir' });
+    onProgress({ step: 'warn', message: 'anchor treasury is low — the off-ramp may be delayed' });
   }
 
   onProgress({ step: 'register', supplierId });
   const { session, sub } = await registerSupplier({ supplierId, iban, name: supplierName });
 
-  // Gösterge değil firm quote — ödeme anında kur kilitlenir (plan 5.5).
+  // A firm quote, not an indicative one — the rate is locked at payout time (plan 5.5).
   onProgress({ step: 'quote' });
   const quote = await session.call((t) =>
     anchor.firmQuote(t, {
@@ -103,12 +106,12 @@ export async function startPayout({
 
   if (!withdrawal.memo || withdrawal.memo_type !== 'id') {
     throw new Error(
-      `Anchor memo_type="id" vermedi (${withdrawal.memo_type}) — memo olmadan ödeme atfedilemez`,
+      `Anchor did not return memo_type="id" (${withdrawal.memo_type}) — a payment without a memo cannot be attributed`,
     );
   }
 
-  // Köprüyü USDC'yi göndermeden ÖNCE kur: callback ödemeden saniyeler sonra
-  // gelebilir ve hangi talebe ait olduğunu bilemezse kayıt düşer.
+  // Build the bridge BEFORE sending the USDC: the callback can arrive seconds
+  // after the payment, and without knowing its request the record is lost.
   if (requestId !== undefined && requestId !== null) {
     await linkAnchorTransaction(withdrawal.id, requestId);
   }
@@ -130,17 +133,17 @@ export async function startPayout({
     stellarTxHash,
     memo: withdrawal.memo,
     usdcSent: usdcAmount,
-    /// Firm quote'un vaat ettiği TRY — gerçekleşenle karşılaştırılacak.
+    /// The TRY the firm quote promised — to be compared against what actually landed.
     tryQuoted: quote.buy_amount,
     status: 'pending_anchor',
   };
 }
 
 /**
- * İKİNCİ faz, yedek yol: anchor'a tek bir durum sorusu sorar.
+ * PHASE TWO, the fallback path: asks the anchor for the status once.
  *
- * `on_change_callback` çalışıyorsa buna gerek kalmaz (Vercel'de çalışır).
- * Localhost'ta anchor bize ulaşamadığı için UI bunu çağırıyor.
+ * Not needed when `on_change_callback` works (it does on Vercel). On localhost the
+ * anchor cannot reach us, so the UI calls this instead.
  */
 export async function fetchPayoutStatus({ supplierId, anchorTransactionId }) {
   const session = anchor.makeSession(relayerKeypair(), { memo: supplierId });
@@ -150,28 +153,28 @@ export async function fetchPayoutStatus({ supplierId, anchorTransactionId }) {
     usdcSent: tx.amount_in ?? null,
     tryPaid: tx.amount_out ?? null,
     fee: tx.amount_fee ?? null,
-    /// Bankanın ödeme referansı — "para nereye gitti" sorusunun fiat tarafı.
+    /// The bank's payment reference — the fiat side of "where did the money go".
     bankReference: tx.external_transaction_id ?? null,
     message: tx.message ?? null,
   };
 }
 
 /**
- * Başlat + bitene kadar bekle. Headless e2e için; HTTP route'u bunu
- * KULLANMAZ (süre tavanı).
+ * Start and wait until it settles. For the headless e2e; the HTTP route does NOT
+ * use this (time ceiling).
  */
 export async function payoutToSupplier(args) {
   const started = await startPayout(args);
   const session = anchor.makeSession(relayerKeypair(), { memo: args.supplierId });
 
   const settled = await anchor.pollTransaction(session, started.anchorTransactionId, {
-    intervalMs: 5000, // off-ramp tespiti 5 sn kadence'ında
+    intervalMs: 5000, // off-ramp detection runs on a 5 s cadence
     timeoutMs: 180000,
     onUpdate: (tx) => args.onProgress?.({ step: 'status', status: tx.status }),
   });
 
   if (settled.status !== 'completed') {
-    throw new Error(`Off-ramp ${settled.status} ile bitti: ${settled.message || ''}`);
+    throw new Error(`Off-ramp ended as ${settled.status}: ${settled.message || ''}`);
   }
 
   return {
@@ -184,7 +187,7 @@ export async function payoutToSupplier(args) {
   };
 }
 
-/** Memo.id ŞART — anchor ödemeyi memo ile eşliyor (plan 5.6). */
+/** Memo.id is MANDATORY — the anchor matches the payment by memo (plan 5.6). */
 async function sendUsdc({ keypair, destination, issuer, amount, memoId }) {
   const horizon = new Horizon.Server(HORIZON_URL);
   const account = await horizon.loadAccount(keypair.publicKey());
@@ -210,8 +213,9 @@ async function sendUsdc({ keypair, destination, issuer, amount, memoId }) {
 }
 
 /**
- * `on_change_callback` imza doğrulaması (plan 5.7).
- * İmza: Ed25519 over "<t>.<host>.<rawBody>", anchor'ın SIGNING_KEY'i ile.
+ * `on_change_callback` signature verification (plan 5.7).
+ * The signature is Ed25519 over "<t>.<host>.<rawBody>", with the anchor's
+ * SIGNING_KEY.
  */
 export async function verifyCallbackSignature({ signatureHeader, host, rawBody }) {
   if (!signatureHeader) return false;

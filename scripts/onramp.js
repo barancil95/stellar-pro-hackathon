@@ -1,16 +1,17 @@
 /**
- * Bir testnet hesabına anchor'ın kendi on-ramp'i üzerinden gerçek USDC alır.
+ * Gets real USDC into a testnet account through the anchor's own on-ramp.
  *
- * Circle faucet'e gerek yok (20 USDC / adres / 2 saat sınırı var); anchor
- * SEP-6 deposit'i sandbox'ta `simulate-bank-transfer` ile anında tamamlıyor.
+ * No Circle faucet needed (it caps at 20 USDC per address per 2 hours); in the
+ * sandbox the anchor's SEP-6 deposit completes instantly via
+ * `simulate-bank-transfer`.
  *
- * Kullanım:
- *   node scripts/onramp.js relayer 500      # 500 TRY karşılığı USDC
+ * Usage:
+ *   node scripts/onramp.js relayer 500      # USDC for 500 TRY
  *   node scripts/onramp.js donor   2000
  *
- * İlk argüman .env'deki <AD>_SECRET anahtarını seçer (relayer|donor|admin…).
- * Hesapta USDC trustline yoksa deposit `pending_trust`'ta bekler — script
- * bunu söyler ve durur, sessizce asılı kalmaz.
+ * The first argument picks the <NAME>_SECRET key from .env (relayer|donor|admin…).
+ * If the account has no USDC trustline the deposit waits in `pending_trust` — the
+ * script says so and stops rather than hanging silently.
  */
 
 import 'dotenv/config';
@@ -24,7 +25,7 @@ const TRY_AMOUNT = process.argv[3] || '1000';
 
 function keypairFor(name) {
   const secret = process.env[`${name.toUpperCase().replace(/-/g, '_')}_SECRET`];
-  if (!secret) throw new Error(`.env'de ${name.toUpperCase()}_SECRET yok`);
+  if (!secret) throw new Error(`${name.toUpperCase()}_SECRET is missing from .env`);
   return Keypair.fromSecret(secret);
 }
 
@@ -32,17 +33,17 @@ async function main() {
   const keypair = keypairFor(NAME);
   const h = await anchor.health();
 
-  log(`hesap    : ${NAME} ${keypair.publicKey()}`);
-  log(`tutar    : ${TRY_AMOUNT} TRY  (kur ${h.rates.buy_rate})`);
+  log(`account  : ${NAME} ${keypair.publicKey()}`);
+  log(`amount   : ${TRY_AMOUNT} TRY  (rate ${h.rates.buy_rate})`);
   if (h.treasury.low_balance) {
-    log('uyarı    : treasury düşük — deposit "treasury_low" ile bekleyebilir');
+    log('warning  : treasury is low — the deposit may wait with "treasury_low"');
   }
 
   await anchor.assertOnrampAmount(TRY_AMOUNT);
 
   const session = anchor.makeSession(keypair);
 
-  // KYC kendiliğinden ACCEPTED olmuyor; en az bir PUT gerekiyor.
+  // KYC does not become ACCEPTED on its own; at least one PUT is required.
   await session.call((t) => anchor.putCustomer(t, {}));
   const customer = await session.call((t) => anchor.getCustomer(t));
   log(`sep12    : ${customer.status}`);
@@ -55,26 +56,26 @@ async function main() {
   );
   log(`deposit  : ${deposit.id}`);
 
-  // Sandbox'a özel: gerçekte bu, bankadan gelen TRY transferidir.
+  // Sandbox-only: in reality this is the incoming TRY transfer from the bank.
   await anchor.simulateBankTransfer(deposit.id, TRY_AMOUNT);
-  log('banka    : transfer simüle edildi');
+  log('bank     : transfer simulated');
 
   const settled = await anchor.pollTransaction(session, deposit.id, {
     intervalMs: 3000,
     timeoutMs: 120000,
     onUpdate: (tx) => {
-      log(`durum    : ${tx.status}${tx.pending_reason ? ` (${tx.pending_reason})` : ''}`);
+      log(`status   : ${tx.status}${tx.pending_reason ? ` (${tx.pending_reason})` : ''}`);
       if (tx.status === 'pending_trust') {
-        log('           ↳ hedefte USDC trustline yok. Açın; anchor kendiliğinden öder.');
+        log('           ↳ the destination has no USDC trustline. Open one; the anchor pays by itself.');
       }
     },
   });
 
   if (settled.status !== 'completed') {
-    throw new Error(`on-ramp ${settled.status} ile bitti: ${settled.message || ''}`);
+    throw new Error(`the on-ramp ended as ${settled.status}: ${settled.message || ''}`);
   }
 
-  log(`✅ ${settled.amount_out} USDC geldi`);
+  log(`✅ ${settled.amount_out} USDC received`);
   log(`   tx: https://stellar.expert/explorer/testnet/tx/${settled.stellar_transaction_id}`);
 }
 

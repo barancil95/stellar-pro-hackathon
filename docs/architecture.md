@@ -1,216 +1,221 @@
-# Teknik tasarım
+# Technical design
 
-Proof-of-Action'ın bileşenleri, verdiğimiz kararlar ve ödediğimiz bedeller.
+Proof-of-Action's components, the decisions we made, and the prices we paid.
 
 ---
 
-## 1. Akış
+## 1. The flow
 
 ```
-BAĞIŞÇI ──[Wallets Kit]──► USDC ──► POA ESCROW (Soroban, SAC üzerinden)
+DONOR ──[Wallets Kit]──► USDC ──► POA ESCROW (Soroban, through the SAC)
                                         │
-                  SAHA AKTÖRÜ ──────────┤ create_request + proof_hash
+                  FIELD ACTOR ──────────┤ create_request + proof_hash
                                         │
         COORDINATOR A/B/C ──[Kit]───────┤ approve_request (2/3)
                                         │
                                         ▼ execute_payout
-                            RELAYER HOT WALLET (backend, sabit adres)
+                            RELAYER HOT WALLET (backend, fixed address)
                                         │ SEP-10(memo) + SEP-12(IBAN) + SEP-38 + SEP-6
                                         ▼ USDC + Memo.id → treasury
-                                TR MOCK ANCHOR ──► TRY ──► TEDARİKÇİ IBAN
+                                TR MOCK ANCHOR ──► TRY ──► SUPPLIER IBAN
 ```
 
 ---
 
-## 2. Neden relayer var
+## 2. Why there is a relayer
 
-Soroban contract'ın keypair'i yoktur. SEP-10 challenge'ını imzalayamaz, HTTP
-isteği atamaz. Fiat bacağı bu yüzden zorunlu olarak zincir dışındadır.
+A Soroban contract has no keypair. It cannot sign a SEP-10 challenge or make an
+HTTP request. The fiat leg is therefore necessarily off-chain.
 
-**Custody duruşu:** Zincir üstü kısım güven gerektirmiyor — onay yetkisi 2/3
-multisig'te. Custody yalnızca fiat rail'in son metresinde, ve o metre zaten
-bankanın.
+**Our custody stance:** the on-chain part is trustless — approval authority sits in
+a 2-of-3 multisig. Custody exists only on the last metre of the fiat rail, and that
+metre already belongs to the bank.
 
-Relayer'ın yetkisi de sınırlı: `execute_payout` hedef adresi **parametre olarak
-almaz**, `Config`'ten okur. Alsaydı 2/3 onaydan sonra çağıran taraf fonu
-istediği adrese yönlendirebilirdi. Relayer'ı değiştirmek yalnızca admin'in
-imzasıyla mümkün (`update_relayer`).
+The relayer's authority is limited too: `execute_payout` does **not take the
+destination as a parameter**, it reads it from `Config`. If it did, the caller
+could redirect the funds anywhere after the 2/3 approvals. Changing the relayer is
+possible only with the admin's signature (`update_relayer`).
 
-**Bilerek açık bırakılan yer: `create_request` yetki istemez.** Sahadaki
-erişimi kısıtlamak istemedik ve talep açmak tek başına para hareket ettirmiyor
-— çıkış 2/3 onaya bağlı. Bedeli şu: herkes talep açabilir, yani talep listesi
-spam'lenebilir ve koordinatörlerin yanlış talebi onaylama riski doğar. Savunma
-ekranda: her talep kanıt hash'i ve tedarikçi referansıyla geliyor, koordinatör
-onaylamadan önce bunları görüyor. Üretimde buraya bir saha-aktörü whitelist'i
-veya talep başına küçük bir depozito gelir; hackathon kapsamında dışarıda
-bıraktık.
+**Deliberately left open: `create_request` requires no authorization.** We did not
+want to restrict access in the field, and opening a request alone moves no money —
+the payout depends on 2/3 approvals. The cost: anyone can open a request, so the
+request list can be spammed and coordinators risk approving the wrong one. The
+defence is on screen: every request arrives with a proof hash and a supplier
+reference, and the coordinator sees both before approving. In production this is
+where a field-actor whitelist or a small per-request deposit would go; we left it
+out of the hackathon scope.
 
 ---
 
-## 3. Contract
+## 3. The contract
 
-### 3.1 Çoklu imza
+### 3.1 Multisig
 
-Onaylar `(request_id, coordinator)` anahtarıyla persistent storage'a yazılır,
-yalnızca sayaç tutulmaz. Sayaç tek başına tutulsaydı bir koordinatör iki kez
-onaylayıp eşiği kendi başına geçebilirdi — `same_coordinator_cannot_approve_twice`
-testi tam olarak bunu koruyor.
+Approvals are written to persistent storage under a `(request_id, coordinator)`
+key, not kept as a bare counter. With only a counter, one coordinator could approve
+twice and clear the threshold alone — the `same_coordinator_cannot_approve_twice`
+test guards exactly that.
 
-`approve_request` koordinatörün **kendi** imzasını ister (`require_auth`), ve
-koordinatör `Config.coordinators` listesinde olmak zorundadır. Liste
-`initialize`'da sabitlenir; on-chain whitelist yönetimi kapsam dışı.
+`approve_request` requires the coordinator's **own** signature (`require_auth`), and
+the coordinator must be on the `Config.coordinators` list. That list is fixed at
+`initialize`; on-chain whitelist management is out of scope.
 
-Eşik sabit 2/3 (`APPROVAL_THRESHOLD`). Konfigüre edilebilir threshold bilinçli
-olarak yazılmadı.
+The threshold is a fixed 2/3 (`APPROVAL_THRESHOLD`). A configurable threshold was
+deliberately not written.
 
-### 3.2 Gizlilik
+### 3.2 Privacy
 
-Düz IBAN ledger'a **yazılmaz**. Zincirde yalnızca
-`supplier_ref = sha256(iban | salt)` durur. Salt ve IBAN backend'de
-(`lib/store.js`), SEP-10 memo'suyla birlikte.
+A plain IBAN is **never written** to the ledger. On-chain there is only
+`supplier_ref = sha256(iban | salt)`. The salt and the IBAN live in the backend
+(`lib/store.js`), along with the SEP-10 memo.
 
-Aynı mantık kanıt için de geçerli: dosya değil, `proof_hash` zincire gider.
+The same logic applies to proof: `proof_hash` goes on-chain, not the file.
 
 ### 3.3 Storage TTL
 
-Persistent entry'ler uzatılmazsa arşivlenir. Her okuma ve yazmada `extend_ttl`
-çağrılıyor (30 gün hedef, 20 günde tetiklenir). Instance storage da aynı şekilde.
+Persistent entries are archived unless extended. Every read and write calls
+`extend_ttl` (a 30-day target, triggered at 20 days). Instance storage works the
+same way.
 
-### 3.4 Hata yüzeyi
+### 3.4 The error surface
 
-Fonksiyonlar panic yerine `Result<T, Error>` döner. Bu sayede `try_*` test
-istemcileri tipli hata görür ve frontend contract hatasını ayırt edebilir.
+Functions return `Result<T, Error>` rather than panicking. That way `try_*` test
+clients see typed errors and the frontend can tell contract errors apart.
 
 ---
 
-## 4. Anchor entegrasyonu
+## 4. The anchor integration
 
-### 4.1 Hiçbir endpoint hardcode değil
+### 4.1 No endpoint is hardcoded
 
-Issuer, SEP endpoint'leri, treasury, kurlar ve limitler `/health`'ten okunur.
-Sandbox etkinlik öncesi sıfırlanabildiği için bu bir dayanıklılık kararı.
+The issuer, the SEP endpoints, the treasury, the rates and the limits are all read
+from `/health`. Since the sandbox can be reset before the event, this is a
+resilience decision.
 
-### 4.2 TRY kimin IBAN'ına gidiyor — en kritik detay
+### 4.2 Whose IBAN the TRY goes to — the most critical detail
 
-Off-ramp, TRY'yi **SEP-10 auth yapan kimliğin** SEP-12 kaydındaki IBAN'a öder.
-Relayer memo'suz auth yaparsa para relayer'ın IBAN'ına gider, tedarikçinin değil.
+The off-ramp pays the TRY to the IBAN in the SEP-12 record of **whichever identity
+did the SEP-10 auth**. If the relayer authenticates without a memo, the money goes
+to the relayer's IBAN, not the supplier's.
 
-**Çözüm:** tedarikçi başına memo kapsamlı müşteri kaydı.
+**The fix:** a memo-scoped customer record per supplier.
 
 ```
-GET /auth?account=<RELAYER>&memo=<tedarikçi_id>   → JWT sub = "G…:memo"
-PUT /sep12/customer { bank_account_number: <tedarikçi IBAN> }
-GET /sep6/withdraw-exchange  (bu token'la)        → payout o IBAN'a
+GET /auth?account=<RELAYER>&memo=<supplier_id>   → JWT sub = "G…:memo"
+PUT /sep12/customer { bank_account_number: <supplier IBAN> }
+GET /sep6/withdraw-exchange  (with that token)   → the payout goes to that IBAN
 ```
 
-Tek relayer hesabı, tedarikçi başına ayrı kimlik. **Ölçüldü:**
+One relayer account, a separate identity per supplier. **Measured:**
 
-| Tedarikçi | SEP-10 sub | Anchor'ın `to` alanı |
+| Supplier | SEP-10 sub | The anchor's `to` field |
 |---|---|---|
 | 77001 | `GBML…:77001` | `TR3200100099999012345678 90` |
 | 77002 | `GBML…:77002` | `TR9700062011110000066723 15` |
 
-### 4.3 Kur riski
+### 4.3 FX risk
 
-Talep açılışında **gösterge** quote gösterilir (UI), ödeme anında **firm** quote
-alınır (işlem). SEP-38 quote 15 dakika geçerli ve tek kullanımlık. Slippage
-toleransı roadmap'te.
+An **indicative** quote is shown when the request is opened (UI), and a **firm**
+quote is taken at payout time (the transaction). A SEP-38 quote is valid for 15
+minutes and single-use. Slippage tolerance is on the roadmap.
 
-### 4.4 Memo zorunluluğu
+### 4.4 The memo requirement
 
-Off-ramp gelen miktarı çevirir — kısmi/fazla ödemeler de tamamlanır. Sadece
-memo doğru olmak zorundadır: `Memo.id`, `memo_type: "id"`. `payout.js` anchor
-`memo_type: "id"` vermezse **ödemeyi göndermeden** hata atar; memo'suz gönderilen
-para atfedilemez.
+The off-ramp converts whatever amount arrives — partial and excess payments also
+complete. Only the memo has to be right: `Memo.id`, `memo_type: "id"`. If the
+anchor does not return `memo_type: "id"`, `payout.js` throws **before sending
+anything**; money sent without a memo cannot be attributed.
 
-### 4.5 Durum takibi
+### 4.5 Status tracking
 
-`on_change_callback` asıl yol, polling yedek. Callback imzası Ed25519 olarak
-anchor'ın `SIGNING_KEY`'i ile `"<t>.<host>.<body>"` üzerinden doğrulanır;
-doğrulanmadan hiçbir durum yazılmaz — yoksa herkes durum uydurabilirdi.
+`on_change_callback` is the main path, polling the fallback. The callback signature
+is verified as Ed25519 over `"<t>.<host>.<body>"` with the anchor's `SIGNING_KEY`;
+no status is written before it verifies — otherwise anyone could make one up.
 
-Localhost'ta anchor bize ulaşamadığı için `PUBLIC_BASE_URL` boşsa callback
-istenmiyor ve doğrudan polling'e düşülüyor.
-
----
-
-## 5. DeFindex vault
-
-Fon, `VAULT_ADDRESS` doluysa escrow'da beklemez: escrow'un adına bir DeFindex
-vault'unda durur ve escrow pay (share) tutar.
-
-### Neden hazır vault değil
-
-Testnet'teki `usdc_paltalabs_vault` BlendUSDC tutuyor
-(`CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU`), anchor'ın USDC
-SAC'ını (`CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA`) değil.
-Bu doğru bir tespitti ama yanlış sonuca götürmüştü ("DeFindex elenir"). Eksik
-olan nokta: factory kendi vault'umuzu kurmamıza izin veriyor.
-[`scripts/create-vault.sh`](../scripts/create-vault.sh) `create_defindex_vault`
-çağrısını anchor'ın SAC'ıyla yapıyor.
-
-### Strateji listesi neden boş
-
-O SAC için deploy edilmiş bir DeFindex stratejisi yok — stratejiler Blend'in
-test USDC'sine bağlı. Vault contract'ının `validate_strategies` fonksiyonu boş
-listeyi kabul ediyor (yalnızca tekrarı reddediyor), dolayısıyla stratejisiz
-vault geçerli.
-
-**Sonucu saklamıyoruz: testnet'te getiri sıfırdır.** Fon vault'ta atıl durur ve
-UI'daki getiri satırı `0.0000000` gösterir. Kazanç mimari:
-
-- Custody escrow'da kalır; vault pozisyonu da contract'ın adınadır.
-- Bakiye tek bir yerden okunur, fon nerede olursa olsun.
-- Mainnet'te tek değişen adreslerdir — Circle USDC + Blend stratejisi — ve aynı
-  kod getiri üretir.
-
-Getiri argümanını abartmamanın somut karşılığı: 1000 $ iki günde ~22 sent.
-Afet-öncesi fonlama (para aylarca bekler, oracle tetikler) roadmap'te kalıyor.
-
-### Contract tarafı
-
-`initialize` baştan `vault: Option<Address>` alıyordu, o yüzden entegrasyon
-deploy yüzeyini bozmadı:
-
-1. `Campaign.principal` ve `.shares` ayrı — vault kapalıyken `shares` 0 kalır.
-2. `deposit` fonu vault'a yatırır, dönen payı `shares`'e ekler.
-3. `execute_payout` önce payı bozdurur, sonra relayer'a öder.
-4. `available_balance()` vault açıkken payın **bugünkü karşılığını** okur —
-   getiri varsa bakiye anaparayı aşar.
-
-**Kritik ayrıntı — `authorize_as_current_contract`.** Vault, USDC'yi escrow'un
-üzerinden kendine çekiyor. Bu transfer escrow adına ama escrow'un doğrudan
-çağrısı değil (araya vault giriyor), dolayısıyla contract'ın o alt-çağrıya
-açıkça yetki vermesi gerekiyor. Satır olmadan deposit `Error(Auth,
-InvalidAction)` ile düşüyor. Test mock'u gerçek vault'un auth davranışını
-taklit ediyor ve satır kaldırıldığında altı test düşüyor — ölçüldü.
-
-### Geri dönüş
-
-`VAULT_ADDRESS` boşsa `initialize --vault null` ile eski davranış aynen
-geçerli: fon escrow'da durur, `shares` 0 kalır. Vault tarafı arızalanırsa
-kaçış yolu tek satır.
+On localhost the anchor cannot reach us, so when `PUBLIC_BASE_URL` is empty no
+callback is requested and we fall straight back to polling.
 
 ---
 
-## 6. Tradeoff'lar
+## 5. The DeFindex vault
 
-| Karar | Bedeli |
+When `VAULT_ADDRESS` is set, the funds do not wait in the escrow: they sit in a
+DeFindex vault on the escrow's behalf and the escrow holds shares.
+
+### Why not a ready-made vault
+
+The testnet `usdc_paltalabs_vault` holds BlendUSDC
+(`CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU`), not the anchor's USDC
+SAC (`CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA`). That was a correct
+finding but it led to the wrong conclusion ("DeFindex is out"). The missing point:
+the factory lets us create our own vault.
+[`scripts/create-vault.sh`](../scripts/create-vault.sh) makes the
+`create_defindex_vault` call with the anchor's SAC.
+
+### Why the strategy list is empty
+
+There is no DeFindex strategy deployed for that SAC — the strategies are tied to
+Blend's test USDC. The vault contract's `validate_strategies` accepts an empty list
+(it only rejects duplicates), so a strategy-less vault is valid.
+
+**We are not hiding the outcome: yield on testnet is zero.** The funds sit idle in
+the vault and the yield line in the UI reads `0.0000000`. What we gain is
+architecture:
+
+- Custody stays with the escrow; the vault position is in the contract's name too.
+- The balance is read from one place, wherever the funds are.
+- On mainnet the only things that change are addresses — Circle USDC and a Blend
+  strategy — and the same code produces yield.
+
+The concrete reason not to oversell the yield argument: $1000 earns about 22 cents
+in two days. Pre-disaster funding (money waits for months, an oracle triggers it)
+stays on the roadmap.
+
+### The contract side
+
+`initialize` took `vault: Option<Address>` from the start, so the integration did
+not break the deploy surface:
+
+1. `Campaign.principal` and `.shares` are separate — `shares` stays 0 while the
+   vault is off.
+2. `deposit` puts the funds into the vault and adds the returned shares to `shares`.
+3. `execute_payout` unwinds the shares first, then pays the relayer.
+4. With the vault on, `available_balance()` reads **today's value** of the shares —
+   with yield, the balance exceeds the principal.
+
+**The critical detail — `authorize_as_current_contract`.** The vault pulls the USDC
+to itself through the escrow. That transfer is on the escrow's behalf but is not
+the escrow's direct call (the vault sits in between), so the contract has to
+authorize that sub-invocation explicitly. Without the line, the deposit fails with
+`Error(Auth, InvalidAction)`. The test mock mimics the real vault's auth behaviour
+and six tests fail when the line is removed — measured.
+
+### The way back
+
+With `VAULT_ADDRESS` empty, `initialize --vault null` keeps the old behaviour
+exactly: the funds stay in the escrow and `shares` stays 0. If the vault side
+breaks, the escape hatch is one line.
+
+---
+
+## 6. Trade-offs
+
+| Decision | The price |
 |---|---|
-| Wallet SDK yerine elle SEP istemcisi | ~230 satır bakım. Karşılığında Node 26'da çalışıyor ve bağımlılık yüzeyi küçük. |
-| Contract spec'i zincirden okunuyor | Her istemci oluşturmada bir ağ çağrısı. Karşılığında binding üretme adımı yok, contract değişince frontend güncel kalıyor. |
-| IPFS yerine SHA-256 | Dosyanın bulunabilirliği kullanıcıda. Zincirdeki taahhüt zaten hash olduğu için ispat gücü aynı. |
-| Tedarikçi defteri dosyada | Tek süreç. Üretimde veritabanı olurdu. |
-| Sabit 2/3 eşik | Esneklik yok. Karşılığında saldırı yüzeyi ve test matrisi küçük. |
-| Relayer sıcak cüzdan | Fiat rail'in son metresinde custody. Zincir üstü kısım bundan etkilenmiyor. |
+| A hand-written SEP client instead of the Wallet SDK | ~230 lines to maintain. In return it runs on Node 26 and the dependency surface is small. |
+| The contract spec is read from the chain | One network call per client construction. In return there is no binding generation step and the frontend stays current when the contract changes. |
+| SHA-256 instead of IPFS | The file's availability is the user's problem. Since the on-chain commitment is a hash either way, the proof is just as strong. |
+| The supplier ledger in a file | Single process. In production it would be a database. |
+| A fixed 2/3 threshold | No flexibility. In return the attack surface and the test matrix stay small. |
+| A hot relayer wallet | Custody on the last metre of the fiat rail. The on-chain part is unaffected by it. |
 
 ---
 
 ## 7. Roadmap
 
-- Slippage toleransı ve quote yenileme
-- Kısmi ödeme, iade, timeout ile talep iptali
-- On-chain coordinator yönetimi ve konfigüre edilebilir threshold
-- Kanıt dosyaları için kalıcı depolama (IPFS/Arweave)
-- Afet-öncesi fonlama: para aylarca bekler, oracle tetikler — asset'i eşleşen
-  bir vault bu senaryoda anlam kazanır
+- Slippage tolerance and quote refresh
+- Partial payments, refunds, cancelling a request on timeout
+- On-chain coordinator management and a configurable threshold
+- Persistent storage for proof files (IPFS/Arweave)
+- Pre-disaster funding: money waits for months, an oracle triggers it — a vault
+  with a matching asset earns its place in that scenario

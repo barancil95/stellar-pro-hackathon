@@ -10,26 +10,28 @@ import {
 import { readRequest, fromStroops } from '../../../lib/soroban.js';
 
 export const dynamic = 'force-dynamic';
-// Serverless tavanının altında kalmak zorundayız (Vercel Hobby 60 sn). Bu
-// route artık anchor'ın bitmesini beklemiyor; USDC'yi gönderip dönüyor.
+// We have to stay under the serverless ceiling (60 s on Vercel Hobby). This route
+// no longer waits for the anchor to finish; it sends the USDC and returns.
 export const maxDuration = 60;
 
 const TERMINAL = new Set(['completed', 'error', 'refunded']);
 
 /**
- * Fiat bacağını BAŞLATIR: USDC relayer'dan anchor treasury'sine gider.
+ * STARTS the fiat leg: USDC goes from the relayer to the anchor's treasury.
  *
- * Zincir üstü 2/3 onay ve `execute_payout` bundan ÖNCE gerçekleşir. Burası
- * yalnızca fiat bacağı; yetki kararı zincirde verilmiştir. Yine de contract'ın
- * durumunu okuyup doğruluyoruz — bu route'a gelen istek tek başına yetki değil.
+ * The on-chain 2/3 approval and `execute_payout` happen BEFORE this. This is only
+ * the fiat leg; the authorization decision was made on-chain. We still read and
+ * verify the contract's state — a request hitting this route is not authorization
+ * by itself.
  *
- * Sonuç `completed` olduğunda değil, USDC gönderildiğinde döner. Nihai durum
- * `on_change_callback` ile gelir; gelmezse GET yedek yolu çalıştırır.
+ * It returns when the USDC has been sent, not when the transfer is `completed`.
+ * The final status arrives via `on_change_callback`; if it does not, the GET runs
+ * the fallback path.
  */
 export async function POST(request) {
   const { requestId } = await request.json();
   if (requestId === undefined || requestId === null) {
-    return NextResponse.json({ error: 'requestId gerekli' }, { status: 400 });
+    return NextResponse.json({ error: 'requestId is required' }, { status: 400 });
   }
 
   const existing = await getPayout(requestId);
@@ -37,20 +39,21 @@ export async function POST(request) {
     return NextResponse.json({ alreadyStarted: true, ...existing });
   }
 
-  // Zincirde ödenmemiş talebe fiat bacağı açılmaz.
+  // No fiat leg is opened for a request that has not been paid on-chain.
   const onChain = await readRequest(requestId);
   if (!onChain.completed) {
     return NextResponse.json(
-      { error: 'Talep zincirde henüz ödenmedi — önce 2/3 onay ve execute_payout' },
+      { error: 'The request has not been paid on-chain yet — 2/3 approvals and execute_payout come first' },
       { status: 409 },
     );
   }
 
-  // İki eşzamanlı POST iki ayrı withdraw açmasın. `completed` kontrolü tek
-  // başına yetmiyordu: ödeme kaydı ancak withdraw'dan SONRA yazılıyor.
+  // Two concurrent POSTs must not open two separate withdrawals. The `completed`
+  // check was not enough on its own: the payout record is written only AFTER the
+  // withdrawal.
   if (!(await acquirePayoutLock(requestId))) {
     return NextResponse.json(
-      { error: 'Bu talep için ödeme zaten sürüyor' },
+      { error: 'A payout for this request is already in progress' },
       { status: 409 },
     );
   }
@@ -59,10 +62,11 @@ export async function POST(request) {
     const supplierRef = Buffer.from(onChain.supplier_ref).toString('hex');
     const supplier = await findBySupplierRef(supplierRef);
     if (!supplier) {
-      // `return` catch'e düşmez; kilit burada bırakılmazsa talep 10 dk kilitli kalır.
+      // A `return` does not hit the catch; without releasing the lock here the
+      // request stays locked for 10 minutes.
       await releasePayoutLock(requestId);
       return NextResponse.json(
-        { error: `supplier_ref ${supplierRef.slice(0, 12)}… kayıtlı değil` },
+        { error: `supplier_ref ${supplierRef.slice(0, 12)}… is not registered` },
         { status: 404 },
       );
     }
@@ -74,7 +78,7 @@ export async function POST(request) {
       iban: supplier.iban,
       supplierName: supplier.name,
       usdcAmount: fromStroops(onChain.amount),
-      // Localhost'ta anchor bize ulaşamaz; o zaman GET'teki yedek yol devrede.
+      // On localhost the anchor cannot reach us; the fallback path in GET takes over.
       onChangeCallback: base ? `${base}/api/anchor-callback` : undefined,
     });
 
@@ -88,16 +92,16 @@ export async function POST(request) {
 }
 
 /**
- * Ödemenin son durumu.
+ * The payout's latest status.
  *
- * Kayıt terminal değilse anchor'a TEK bir soru sorup günceller — bu, callback
- * ulaşamadığında (localhost) devreye giren yedek yol. Her istek kısa kalır,
- * uzun polling yok.
+ * If the record is not terminal it asks the anchor ONCE and updates — the fallback
+ * for when the callback cannot reach us (localhost). Every request stays short, no
+ * long polling.
  */
 export async function GET(request) {
   const requestId = new URL(request.url).searchParams.get('requestId');
   if (!requestId) {
-    return NextResponse.json({ error: 'requestId gerekli' }, { status: 400 });
+    return NextResponse.json({ error: 'requestId is required' }, { status: 400 });
   }
 
   const payout = await getPayout(requestId);
@@ -117,7 +121,7 @@ export async function GET(request) {
     if (TERMINAL.has(fresh.status)) await releasePayoutLock(requestId);
     return NextResponse.json(merged);
   } catch (e) {
-    // Anchor'a ulaşılamıyorsa bilinen son durumu ver; ekran boş kalmasın.
+    // If the anchor is unreachable, return the last known status so the screen is not empty.
     return NextResponse.json({ ...payout, statusError: e.message });
   }
 }

@@ -1,14 +1,14 @@
 /**
- * M2 acceptance — uçtan uca, tek komut.
+ * M2 acceptance — end to end, one command.
  *
- *   USDC deposit → talep → 2/3 onay → payout → relayer
- *   → memo'lu tedarikçi kaydı → firm quote → withdraw-exchange
- *   → tedarikçinin IBAN'ına TRY `completed`
+ *   USDC deposit → request → 2/3 approvals → payout → relayer
+ *   → memo-scoped supplier record → firm quote → withdraw-exchange
+ *   → TRY `completed` in the supplier's IBAN
  *
- * Demo'da bu akış UI'dan yürür; burada headless koşuyor ki her deploy'dan
- * sonra bir komutla doğrulanabilsin.
+ * In the demo this flow runs from the UI; here it runs headless so it can be
+ * verified with a single command after every deploy.
  *
- * Kullanım: WEB=http://localhost:3000 node scripts/e2e-m2.js
+ * Usage: WEB=http://localhost:3000 node scripts/e2e-m2.js
  */
 
 import 'dotenv/config';
@@ -31,7 +31,7 @@ const PASSPHRASE = process.env.NETWORK_PASSPHRASE;
 const log = (...a) => console.log(...a);
 const step = (n, t) => log(`\n${'─'.repeat(64)}\n${n}. ${t}\n${'─'.repeat(64)}`);
 
-/** Headless imzalayıcı. Tarayıcıda bunun yerine Wallets Kit var. */
+/** The headless signer. In the browser, Wallets Kit takes its place. */
 function localSigner(keypair) {
   return async (xdr) => {
     const tx = TransactionBuilder.fromXDR(xdr, PASSPHRASE);
@@ -63,29 +63,29 @@ async function main() {
 
   const AMOUNT_USDC = process.env.E2E_AMOUNT || '1.5';
   log('contract :', CONTRACT_ID);
-  log('tutar    :', AMOUNT_USDC, 'USDC');
+  log('amount   :', AMOUNT_USDC, 'USDC');
 
   const before = await readEscrow();
-  log('vault    :', before.vault ?? 'kapalı — fon escrow\'da durur');
+  log('vault    :', before.vault ?? 'off — funds stay in the escrow');
 
-  step(1, 'Tedarikçi kaydı — IBAN backend\'de, zincire hash\'i gider');
+  step(1, 'Supplier registration — the IBAN stays in the backend, its hash goes on-chain');
   const supplier = await api('/api/suppliers', {
-    name: 'ABC Akaryakıt',
+    name: 'ABC Fuel Co.',
     iban: 'TR320010009999901234567890',
   });
   log('supplierId :', supplier.supplierId);
   log('supplierRef:', supplier.supplierRef.slice(0, 24) + '…');
 
-  step(2, before.vault ? 'Bağış — escrow üzerinden DeFindex vault\'una' : 'Bağış — escrow\'a USDC');
+  step(2, before.vault ? 'Donation — through the escrow into the DeFindex vault' : 'Donation — USDC into the escrow');
   const depositHash = await deposit({ ...as(donor), amount: AMOUNT_USDC });
   log('tx :', explorerTx(depositHash));
   const afterDeposit = await readEscrow();
-  log('ödenebilir bakiye:', fromStroops(afterDeposit.balance), 'USDC');
+  log('payable balance  :', fromStroops(afterDeposit.balance), 'USDC');
   if (before.vault) {
-    log('vault payı       :', fromStroops(afterDeposit.campaign.shares), 'pay');
+    log('vault shares     :', fromStroops(afterDeposit.campaign.shares), 'shares');
   }
 
-  step(3, 'Talep — ihtiyaç kanıtı hash\'iyle');
+  step(3, 'Request — with the proof-of-need hash');
   const proofHash = Buffer.from(
     '9f2c4e1a7b3d5f8e0c6a2b4d8e1f3a5c7b9d0e2f4a6c8b1d3e5f7a9c0b2d4e6f',
     'hex',
@@ -96,64 +96,64 @@ async function main() {
     amount: AMOUNT_USDC,
     proofHash,
   });
-  // İhtiyaç açıklaması zincire sığmaz; UI'ın yaptığını burada da yapıyoruz.
+  // The need description does not fit on-chain; we do here what the UI does.
   await api('/api/requests', {
     requestId: Number(requestId),
-    need: 'Jeneratör yakıtı — 3 günlük',
-    supplierName: 'ABC Akaryakıt',
+    need: 'Generator fuel — 3 days',
+    supplierName: 'ABC Fuel Co.',
   });
 
   log('request id :', requestId);
   log('tx :', explorerTx(requestHash));
 
-  step(4, 'Çoklu imza — iki AYRI cüzdan');
-  log('coord A onayı…');
+  step(4, 'Multisig — two SEPARATE wallets');
+  log('coord A approving…');
   await approveRequest({ ...as(coordA), requestId });
-  log('  onay sayısı:', (await readRequest(requestId)).approvals_count, '/ 2 — henüz yetmez');
-  log('coord B onayı…');
+  log('  approvals:', (await readRequest(requestId)).approvals_count, '/ 2 — not enough yet');
+  log('coord B approving…');
   await approveRequest({ ...as(coordB), requestId });
-  log('  onay sayısı:', (await readRequest(requestId)).approvals_count, '/ 2 ✓');
+  log('  approvals:', (await readRequest(requestId)).approvals_count, '/ 2 ✓');
 
   step(
     5,
     before.vault
-      ? 'execute_payout — vault payı bozdurulur, fon relayer\'a'
-      : 'execute_payout — fon relayer\'a (hedef contract\'ta sabit)',
+      ? 'execute_payout — vault shares are unwound, funds go to the relayer'
+      : 'execute_payout — funds to the relayer (the destination is fixed in the contract)',
   );
   const payoutHash = await executePayout({ ...as(donor), requestId });
   log('tx :', explorerTx(payoutHash));
-  log('talep completed:', (await readRequest(requestId)).completed);
+  log('request completed:', (await readRequest(requestId)).completed);
   if (before.vault) {
     const afterPayout = await readEscrow();
-    log('kalan vault payı:', fromStroops(afterPayout.campaign.shares), 'pay');
+    log('vault shares left:', fromStroops(afterPayout.campaign.shares), 'shares');
   }
 
-  step(6, 'Fiat bacağı — anchor üzerinden tedarikçinin IBAN\'ına');
+  step(6, 'The fiat leg — through the anchor to the supplier\'s IBAN');
   const started = await api('/api/payout', { requestId: Number(requestId) });
   log('anchor tx  :', started.anchorTransactionId);
-  log('USDC gitti :', explorerTx(started.stellarTxHash), `memo ${started.memo}`);
+  log('USDC sent  :', explorerTx(started.stellarTxHash), `memo ${started.memo}`);
 
-  // POST artık `completed` beklemiyor (serverless süre tavanı). Durumu
-  // GET yoklar — Vercel'de bunu on_change_callback zaten yapmış olur.
+  // The POST no longer waits for `completed` (serverless time ceiling). The GET
+  // polls the status — on Vercel on_change_callback will already have done it.
   const TERMINAL = new Set(['completed', 'error', 'refunded']);
   let payout = started;
   for (let i = 0; i < 40 && !TERMINAL.has(payout.status); i += 1) {
     await new Promise((r) => setTimeout(r, 5000));
     payout = await api(`/api/payout?requestId=${requestId}`);
-    log('durum      :', payout.status);
+    log('status     :', payout.status);
   }
   if (payout.status !== 'completed') {
-    throw new Error(`Off-ramp tamamlanmadı: ${payout.status}`);
+    throw new Error(`The off-ramp did not complete: ${payout.status}`);
   }
 
-  log('SEP-10 sub :', started.sub, '← memo kapsamı');
-  log('quote      :', started.quoteId, `(vaat ${started.tryQuoted} TRY)`);
+  log('SEP-10 sub :', started.sub, '← memo scope');
+  log('quote      :', started.quoteId, `(promised ${started.tryQuoted} TRY)`);
   log('USDC       :', payout.usdcSent);
-  log('TRY        :', payout.tryPaid, `(komisyon ${payout.fee})`);
-  log('banka ref  :', payout.bankReference);
+  log('TRY        :', payout.tryPaid, `(fee ${payout.fee})`);
+  log('bank ref   :', payout.bankReference);
 
   log(`\n${'═'.repeat(64)}`);
-  log('✅ M2 ACCEPTANCE: deposit → 2/3 onay → payout → TRY, tedarikçinin IBAN\'ında.');
+  log('✅ M2 ACCEPTANCE: deposit → 2/3 approvals → payout → TRY, in the supplier\'s IBAN.');
   log('═'.repeat(64));
 }
 
